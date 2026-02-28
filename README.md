@@ -384,11 +384,45 @@ Session files are written under `./.agent-sessions/<sessionId>/` (`kernel.jsonl`
 
 ---
 
+## Session Management
+
+`listSessions` and `deleteSession` are standalone utilities for CLI and Web API use cases.
+
+```ts
+import { listSessions, deleteSession } from '@devxiyang/agent-kernel/kernel'
+
+// List all sessions, sorted by most recently updated
+const sessions = listSessions('./.agent-sessions')
+// [
+//   { sessionId: 'demo-001', updatedAt: 1740000000000, messageCount: 12 },
+//   { sessionId: 'demo-002', updatedAt: 1739000000000, messageCount: 4 },
+// ]
+
+// Delete a session
+deleteSession('./.agent-sessions', 'demo-001')
+```
+
+`SessionInfo` type:
+
+```ts
+type SessionInfo = {
+  sessionId:    string  // directory name used as session ID
+  updatedAt:    number  // log.jsonl mtime in milliseconds
+  messageCount: number  // number of entries in log.jsonl
+}
+```
+
+Both functions are safe to call on non-existent paths — `listSessions` returns `[]` and
+`deleteSession` is a silent no-op when the session or directory does not exist.
+
+---
+
 ## Build Output
 
 Compiled files and type declarations are generated into `dist/`.
 
 ```bash
-npm run build
-npm run typecheck
+npm run build      # compile TypeScript to dist/
+npm run typecheck  # type-check without emitting
+npm test           # run unit tests (vitest)
 ```
