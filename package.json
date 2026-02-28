@@ -1,0 +1,51 @@
+{
+  "name": "@devxiyang/agent-kernel",
+  "version": "0.0.1-beta",
+  "description": "Agent kernel and loop library",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devxiyang/agent.kernel.git"
+  },
+  "keywords": [
+    "agent",
+    "agent-runtime",
+    "llm",
+    "tools",
+    "kernel",
+    "typescript"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./agent": {
+      "types": "./dist/core/agent/index.d.ts",
+      "import": "./dist/core/agent/index.js"
+    },
+    "./kernel": {
+      "types": "./dist/core/kernel/index.d.ts",
+      "import": "./dist/core/kernel/index.js"
+    },
+    "./event-stream": {
+      "types": "./dist/event-stream.d.ts",
+      "import": "./dist/event-stream.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  }
+}
