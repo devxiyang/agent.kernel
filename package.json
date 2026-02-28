@@ -1,6 +1,6 @@
 {
   "name": "@devxiyang/agent-kernel",
-  "version": "0.0.1-beta",
+  "version": "0.1.0-beta",
   "description": "Agent kernel and loop library",
   "license": "MIT",
   "repository": {
@@ -47,5 +47,8 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "typescript": "^5.8.0"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.48"
   }
 }

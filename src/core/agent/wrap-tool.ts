@@ -1,3 +1,4 @@
+import type { TObject } from '@sinclair/typebox'
 import type {
   AgentTool,
   BlockResult,
@@ -14,12 +15,12 @@ import type {
  * Hooks are transparent to the agent loop — the loop only sees a plain AgentTool.
  */
 export function wrapTool<
-  TInput   extends Record<string, unknown> = Record<string, unknown>,
+  TSchema  extends TObject = TObject,
   TDetails = unknown,
 >(
-  tool:  AgentTool<TInput, TDetails>,
+  tool:  AgentTool<TSchema, TDetails>,
   hooks: ToolWrapHooks,
-): AgentTool<TInput, TDetails> {
+): AgentTool<TSchema, TDetails> {
   return {
     ...tool,
     execute: async (toolCallId, input, signal, onUpdate) => {

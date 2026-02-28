@@ -20,6 +20,7 @@
  *   9. Else → check for follow-up messages (outer loop) or stop.
  */
 
+import { Value } from '@sinclair/typebox/value'
 import { EventStream } from '../../event-stream'
 import type { AgentKernel } from '../kernel'
 import type {
@@ -113,6 +114,7 @@ async function _run(
         // Call the LLM; onEvent forwards real-time events to the UI stream
         const stepResult = await config.stream(
           messages,
+          config.tools,
           (event) => {
             if (event.type === 'text-delta') {
               stepText += event.delta
@@ -246,12 +248,17 @@ async function executeTools(
     try {
       if (!tool) throw new Error(`Tool not found: ${tc.toolName}`)
 
-      result = await tool.execute(
-        tc.toolCallId,
-        tc.input,
-        signal,
-        (partial) => stream.push({ type: 'tool_update', toolCallId: tc.toolCallId, partial }),
-      )
+      const validated = validateInput(tool, tc.input)
+      if (!validated.ok) {
+        result = { content: validated.content, isError: true }
+      } else {
+        result = await tool.execute(
+          tc.toolCallId,
+          validated.value,
+          signal,
+          (partial) => stream.push({ type: 'tool_update', toolCallId: tc.toolCallId, partial }),
+        )
+      }
     } catch (err) {
       result = { content: err instanceof Error ? err.message : String(err), isError: true }
     }
@@ -289,6 +296,28 @@ function accumulateUsage(acc: Usage, step: Usage): void {
   acc.cost.cacheWrite += step.cost.cacheWrite
   acc.cost.total      += step.cost.total
 }
+
+// ─── validateInput ────────────────────────────────────────────────────────────
+
+type ValidationOk  = { ok: true;  value: Record<string, unknown> }
+type ValidationErr = { ok: false; content: string }
+
+function validateInput(
+  tool:  AgentTool,
+  input: Record<string, unknown>,
+): ValidationOk | ValidationErr {
+  if (!tool.parameters) return { ok: true, value: input }
+  try {
+    const value = Value.Parse(tool.parameters, input) as Record<string, unknown>
+    return { ok: true, value }
+  } catch {
+    const errors  = [...Value.Errors(tool.parameters, input)]
+    const detail  = errors.map((e) => `${e.path || '(root)'}: ${e.message}`).join('; ')
+    return { ok: false, content: detail || 'Parameter validation failed' }
+  }
+}
+
+// ─── skipTool ─────────────────────────────────────────────────────────────────
 
 function skipTool(
   toolCallId: string,

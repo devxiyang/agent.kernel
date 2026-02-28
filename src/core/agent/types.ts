@@ -1,3 +1,4 @@
+import type { TObject, Static } from '@sinclair/typebox'
 import type {
   Usage,
   AgentEntry,
@@ -35,9 +36,13 @@ export type LLMStepResult = {
 /**
  * Provider-injected stream function. Implementer closes over model, API key,
  * system prompt, and any other provider config.
+ *
+ * `tools` carries the full AgentTool definitions (name, description, parameters)
+ * so the provider adapter can build its own tool schema without hardcoding it.
  */
 export type StreamFn = (
   messages: AgentMessage[],
+  tools:    AgentTool[],
   onEvent:  (event: LLMStreamEvent) => void,
   signal?:  AbortSignal,
 ) => Promise<LLMStepResult>
@@ -60,15 +65,23 @@ export type ToolResult<TDetails = unknown> = {
 }
 
 export type AgentTool<
-  TInput   extends Record<string, unknown> = Record<string, unknown>,
+  TSchema  extends TObject = TObject,
   TDetails = unknown,
 > = {
-  name:    string
+  name:         string
   /** Human-readable label for UI display. Defaults to `name` if omitted. */
-  label?:  string
+  label?:       string
+  /** Passed to the LLM provider as the tool description. */
+  description:  string
+  /**
+   * TypeBox schema for the tool's input parameters.
+   * Used for runtime validation in the loop and passed directly to the provider
+   * as JSON Schema (TypeBox schemas are standard JSON Schema at runtime).
+   */
+  parameters?:  TSchema
   execute: (
     toolCallId: string,
-    input:      TInput,
+    input:      Static<TSchema>,
     signal?:    AbortSignal,
     onUpdate?:  (partial: ToolResult<TDetails>) => void,
   ) => Promise<ToolResult<TDetails>>
