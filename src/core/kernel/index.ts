@@ -26,3 +26,6 @@ export type {
 export { COMPACTION_TYPE } from './types'
 
 export { createKernel } from './kernel'
+
+export type { SessionInfo } from './session-store'
+export { listSessions, deleteSession } from './session-store'
