@@ -65,8 +65,9 @@ export class Agent {
   private _toolTimeout:      AgentOptions['toolTimeout']
   private _retryOnError:     AgentOptions['retryOnError']
 
-  private _abortController: AbortController | null = null
-  private _runningPromise:  Promise<AgentResult | undefined> | null = null
+  private _abortController:    AbortController | null = null
+  private _steeringController: AbortController        = new AbortController()
+  private _runningPromise:     Promise<AgentResult | undefined> | null = null
 
   private readonly _steeringQueue: AgentEntry[] = []
   private readonly _followUpQueue: AgentEntry[] = []
@@ -191,6 +192,9 @@ export class Agent {
    */
   steer(entries: AgentEntry | AgentEntry[]): void {
     this._steeringQueue.push(...(Array.isArray(entries) ? entries : [entries]))
+    // Abort the current tool batch immediately, then reset for the next one.
+    this._steeringController.abort()
+    this._steeringController = new AbortController()
   }
 
   /**
@@ -247,7 +251,8 @@ export class Agent {
   // ── Private ─────────────────────────────────────────────────────────────
 
   private _run(): void {
-    this._abortController = new AbortController()
+    this._abortController    = new AbortController()
+    this._steeringController = new AbortController()
 
     const eventStream = runLoop(this._kernel, {
       stream:              this._stream,
@@ -258,6 +263,7 @@ export class Agent {
       onStepEnd:           this._onStepEnd,
       getSteeringMessages: () => this._drainSteering(),
       getFollowUpMessages: () => this._drainFollowUp(),
+      getSteeringSignal:   () => this._steeringController.signal,
       parallelTools:       this._parallelTools,
       onContextFull:       this._onContextFull,
       toolTimeout:         this._toolTimeout,

@@ -705,6 +705,207 @@ describe('runLoop', () => {
     })
   })
 
+  describe('getSteeringSignal — immediate tool interruption', () => {
+    function twoToolStream(): ReturnType<typeof vi.fn> {
+      let callCount = 0
+      return vi.fn().mockImplementation(async () => {
+        callCount++
+        if (callCount === 1) {
+          return stepResult({
+            toolCalls: [
+              { toolCallId: 'c1', toolName: 'tool1', input: {} },
+              { toolCallId: 'c2', toolName: 'tool2', input: {} },
+            ],
+            stopReason: 'tool_use',
+          })
+        }
+        return stepResult()
+      })
+    }
+
+    it('passes a valid AbortSignal to every tool execute call', async () => {
+      let receivedSignal: AbortSignal | undefined
+
+      const tool: AgentTool = {
+        name:        'check',
+        description: 'checks signal',
+        execute: async (_id, _input, signal) => {
+          receivedSignal = signal
+          return { content: 'ok', isError: false }
+        },
+      }
+
+      let callCount = 0
+      const streamFn = vi.fn().mockImplementation(async () => {
+        callCount++
+        if (callCount === 1) {
+          return stepResult({
+            toolCalls:  [{ toolCallId: 'c1', toolName: 'check', input: {} }],
+            stopReason: 'tool_use',
+          })
+        }
+        return stepResult()
+      })
+
+      await collectEvents(baseConfig({ stream: streamFn, tools: [tool] }))
+      expect(receivedSignal).toBeInstanceOf(AbortSignal)
+    })
+
+    it('sequential: aborts current tool and skips remaining when steeringSignal fires', async () => {
+      const steeringController = new AbortController()
+      const execute2 = vi.fn().mockResolvedValue({ content: 'done', isError: false })
+      let tool1Aborted = false
+
+      // tool1 triggers the steering abort itself (simulates user calling steer() mid-tool),
+      // then cooperates by awaiting the signal before returning.
+      const execute1 = vi.fn().mockImplementation(async (_id: string, _input: unknown, signal: AbortSignal) => {
+        // Defer abort to next microtask so the abort listener below is registered first
+        Promise.resolve().then(() => steeringController.abort())
+        await new Promise<void>(resolve => {
+          if (signal.aborted) return resolve()
+          signal.addEventListener('abort', resolve, { once: true })
+        })
+        tool1Aborted = true
+        return { content: 'interrupted', isError: true }
+      })
+
+      let steeringDelivered = false
+      const getSteeringMessages = vi.fn().mockImplementation(async () => {
+        // Only return steering after tool1 has actually been aborted
+        if (tool1Aborted && !steeringDelivered) {
+          steeringDelivered = true
+          return [{ type: 'user' as const, payload: { parts: [{ type: 'text' as const, text: 'stop' }] } }]
+        }
+        return []
+      })
+
+      const { events } = await collectEvents(baseConfig({
+        stream:              twoToolStream(),
+        tools:               [
+          { name: 'tool1', description: 't1', execute: execute1 },
+          { name: 'tool2', description: 't2', execute: execute2 },
+        ],
+        getSteeringSignal:   () => steeringController.signal,
+        getSteeringMessages,
+      }))
+
+      // tool1 ran and was aborted via the merged signal
+      expect(execute1).toHaveBeenCalledOnce()
+      expect(tool1Aborted).toBe(true)
+      // tool2 was skipped because steering arrived after tool1
+      expect(execute2).not.toHaveBeenCalled()
+
+      const toolResults = events.filter(e => e.type === 'tool_result') as Array<{
+        toolCallId: string; isError: boolean
+      }>
+      expect(toolResults).toHaveLength(2)
+      expect(toolResults.find(r => r.toolCallId === 'c2')?.isError).toBe(true)
+    })
+
+    it('parallel: aborts all concurrent tools simultaneously when steeringSignal fires', async () => {
+      const steeringController = new AbortController()
+      const abortedTools: string[] = []
+      let abortTriggered = false
+
+      // First tool to run triggers the steering abort; both wait for their signal.
+      const makeAbortableTool = (name: string): AgentTool => ({
+        name,
+        description: name,
+        execute: async (_id: string, _input: unknown, signal: AbortSignal) => {
+          if (!abortTriggered) {
+            abortTriggered = true
+            // Defer abort to next microtask so the abort listener below is registered first
+            Promise.resolve().then(() => steeringController.abort())
+          }
+          await new Promise<void>(resolve => {
+            if (signal.aborted) { abortedTools.push(name); return resolve() }
+            signal.addEventListener('abort', () => { abortedTools.push(name); resolve() }, { once: true })
+          })
+          return { content: 'interrupted', isError: true }
+        },
+      })
+
+      await collectEvents(baseConfig({
+        stream:            twoToolStream(),
+        tools:             [makeAbortableTool('tool1'), makeAbortableTool('tool2')],
+        getSteeringSignal: () => steeringController.signal,
+        parallelTools:     true,
+      }))
+
+      // Both tools received the abort signal and stopped
+      expect(abortedTools).toContain('tool1')
+      expect(abortedTools).toContain('tool2')
+    })
+
+    it('steeringSignal is refreshed between tool batches (fresh signal per batch)', async () => {
+      // Simulate Agent behaviour: steeringController is reset after each steer().
+      // The first batch should be aborted; the second batch should run normally.
+      let batchController = new AbortController()
+      let firstBatchAborted = false
+
+      let streamCallCount = 0
+      const streamFn = vi.fn().mockImplementation(async () => {
+        streamCallCount++
+        if (streamCallCount === 1) {
+          // First LLM call: one tool, will be aborted
+          return stepResult({
+            toolCalls:  [{ toolCallId: 'c1', toolName: 'abortable', input: {} }],
+            stopReason: 'tool_use',
+          })
+        }
+        if (streamCallCount === 2) {
+          // Second LLM call (after steering): another tool, runs normally
+          return stepResult({
+            toolCalls:  [{ toolCallId: 'c2', toolName: 'normal', input: {} }],
+            stopReason: 'tool_use',
+          })
+        }
+        return stepResult()
+      })
+
+      const abortableTool: AgentTool = {
+        name: 'abortable', description: 'abortable',
+        execute: async (_id, _input, signal) => {
+          // Defer abort so the listener below is registered first, then reset
+          // (mimicking Agent._steeringController = new AbortController() after steer())
+          Promise.resolve().then(() => {
+            batchController.abort()
+            batchController = new AbortController()
+          })
+          await new Promise<void>(resolve => {
+            if (signal.aborted) return resolve()
+            signal.addEventListener('abort', resolve, { once: true })
+          })
+          firstBatchAborted = true
+          return { content: 'interrupted', isError: true }
+        },
+      }
+      const normalExecute = vi.fn().mockResolvedValue({ content: 'ok', isError: false })
+      const normalTool: AgentTool = { name: 'normal', description: 'normal', execute: normalExecute }
+
+      let steeringDelivered = false
+      const getSteeringMessages = vi.fn().mockImplementation(async () => {
+        if (firstBatchAborted && !steeringDelivered) {
+          steeringDelivered = true
+          return [{ type: 'user' as const, payload: { parts: [{ type: 'text' as const, text: 'redirect' }] } }]
+        }
+        return []
+      })
+
+      await collectEvents(baseConfig({
+        stream:              streamFn,
+        tools:               [abortableTool, normalTool],
+        getSteeringSignal:   () => batchController.signal,
+        getSteeringMessages,
+      }))
+
+      // First batch: tool was aborted
+      expect(firstBatchAborted).toBe(true)
+      // Second batch: normal tool ran without interruption
+      expect(normalExecute).toHaveBeenCalledOnce()
+    })
+  })
+
   describe('skipTool — steering arrives mid-tool-execution', () => {
     it('skips remaining tools and marks them as error when steering arrives', async () => {
       const execute2 = vi.fn().mockResolvedValue({ content: 'tool2 done', isError: false })

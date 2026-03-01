@@ -99,7 +99,7 @@ export type AgentTool<
   execute: (
     toolCallId: string,
     input:      Static<TSchema>,
-    signal?:    AbortSignal,
+    signal:     AbortSignal,
     onUpdate?:  (partial: ToolResult<TDetails>) => void,
   ) => Promise<ToolResult<TDetails>>
 }
@@ -171,6 +171,13 @@ export interface AgentConfig {
 
   /** Returns queued steering entries; called between tool calls and before each LLM step. */
   getSteeringMessages?: () => Promise<AgentEntry[]>
+  /**
+   * Returns the current steering AbortSignal. Called before each tool batch so the
+   * loop always gets the latest signal. When a steering message is queued the caller
+   * aborts this signal (and immediately resets it), which causes all tools in the
+   * current batch to receive an abort — fulfilling the cooperative-cancellation contract.
+   */
+  getSteeringSignal?: () => AbortSignal
   /** Returns queued follow-up entries; checked after the agent would otherwise stop. */
   getFollowUpMessages?: () => Promise<AgentEntry[]>
 

@@ -178,6 +178,7 @@ async function _run(
             stream,
             config.signal,
             config.getSteeringMessages,
+            config.getSteeringSignal,
             config.parallelTools ?? false,
             config.toolTimeout,
           )
@@ -251,13 +252,22 @@ async function executeTools(
   stream:              EventStream<AgentEvent, AgentResult>,
   signal:              AbortSignal | undefined,
   getSteeringMessages: AgentConfig['getSteeringMessages'],
+  getSteeringSignal:   AgentConfig['getSteeringSignal'],
   parallelTools:       boolean,
   toolTimeout:         number | undefined,
 ): Promise<{ steeringMessages?: AgentEntry[]; toolResults: ToolResultInfo[] }> {
+  // Merge parent signal with the current steering signal so tools are aborted
+  // immediately when the user steers, without waiting for the current tool to finish.
+  const steeringSignal = getSteeringSignal?.()
+  const signals = [signal, steeringSignal].filter((s): s is AbortSignal => s != null)
+  const toolSignal = signals.length === 0
+    ? new AbortController().signal
+    : signals.length === 1 ? signals[0] : AbortSignal.any(signals)
+
   if (parallelTools) {
-    return executeToolsParallel(toolCalls, tools, kernel, stream, signal, getSteeringMessages, toolTimeout)
+    return executeToolsParallel(toolCalls, tools, kernel, stream, toolSignal, getSteeringMessages, toolTimeout)
   }
-  return executeToolsSequential(toolCalls, tools, kernel, stream, signal, getSteeringMessages, toolTimeout)
+  return executeToolsSequential(toolCalls, tools, kernel, stream, toolSignal, getSteeringMessages, toolTimeout)
 }
 
 /**
@@ -270,7 +280,7 @@ async function executeToolsSequential(
   tools:               AgentTool[],
   kernel:              AgentKernel,
   stream:              EventStream<AgentEvent, AgentResult>,
-  signal:              AbortSignal | undefined,
+  signal:              AbortSignal,
   getSteeringMessages: AgentConfig['getSteeringMessages'],
   toolTimeout:         number | undefined,
 ): Promise<{ steeringMessages?: AgentEntry[]; toolResults: ToolResultInfo[] }> {
@@ -308,27 +318,25 @@ async function executeToolsSequential(
 
 /**
  * Execute all tool calls concurrently with Promise.allSettled.
- * Each tool gets its own AbortController linked to the parent signal.
- * Steering is checked once after all tools complete; if present, all results
- * are discarded and "interrupted" placeholders are written to the kernel.
+ * Each tool gets its own AbortController linked to the (already-merged) signal,
+ * which includes the steeringSignal — so all tools are aborted immediately when
+ * the user steers. Steering is checked once after all tools settle.
  */
 async function executeToolsParallel(
   toolCalls:           ToolCallInfo[],
   tools:               AgentTool[],
   kernel:              AgentKernel,
   stream:              EventStream<AgentEvent, AgentResult>,
-  signal:              AbortSignal | undefined,
+  signal:              AbortSignal,
   getSteeringMessages: AgentConfig['getSteeringMessages'],
   toolTimeout:         number | undefined,
 ): Promise<{ steeringMessages?: AgentEntry[]; toolResults: ToolResultInfo[] }> {
   let steeringArrived = false
 
-  // Per-tool AbortControllers linked to the parent signal
+  // Per-tool AbortControllers linked to the merged signal (parent + steering)
   const controllers = toolCalls.map(() => new AbortController())
-  if (signal) {
-    const onAbort = () => controllers.forEach(c => c.abort())
-    signal.addEventListener('abort', onAbort, { once: true })
-  }
+  const onAbort = () => controllers.forEach(c => c.abort())
+  signal.addEventListener('abort', onAbort, { once: true })
 
   // Run all tools concurrently
   const settled = await Promise.allSettled(
@@ -380,7 +388,7 @@ async function runSingleTool(
   tc:          ToolCallInfo,
   tools:       AgentTool[],
   stream:      EventStream<AgentEvent, AgentResult>,
-  signal:      AbortSignal | undefined,
+  signal:      AbortSignal,
   toolTimeout: number | undefined,
 ): Promise<ToolResult> {
   const tool = tools.find((t) => t.name === tc.toolName)
