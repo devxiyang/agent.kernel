@@ -1,6 +1,6 @@
 {
   "name": "@devxiyang/agent-kernel",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Agent kernel and loop library",
   "license": "MIT",
   "repository": {

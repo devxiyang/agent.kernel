@@ -161,14 +161,15 @@ describe('Agent', () => {
       await agent.waitForIdle()
     })
 
-    it('continues when follow-up messages are queued', async () => {
+    it('continues when follow-up messages are queued while running', async () => {
       const kernel = createKernel()
       const agent = new Agent(kernel, defaultOptions())
       agent.prompt(userEntry('hi'))
-      await agent.waitForIdle()
+      // queue follow-up while running — does not auto-start a second run
       agent.followUp(userEntry('follow up'))
-      expect(() => agent.continue()).not.toThrow()
       await agent.waitForIdle()
+      // agent processed both turns; continue() on a clean idle state throws
+      expect(() => agent.continue()).toThrow()
     })
   })
 
@@ -334,13 +335,16 @@ describe('Agent', () => {
     it('clears steering and follow-up queues', async () => {
       const kernel = createKernel()
       const agent = new Agent(kernel, defaultOptions())
+      // queue while running so followUp doesn't auto-start
+      agent.prompt(userEntry('hi'))
       agent.steer(userEntry('steer'))
       agent.followUp(userEntry('follow'))
+      agent.abort()
+      await agent.waitForIdle()
       agent.reset()
-      // After reset, queues are empty — a normal prompt/continue won't process them
+      // After reset, queues are empty
       agent.prompt(userEntry('hi'))
       await agent.waitForIdle()
-      // Just verify it ran without issues and queues were drained
       expect(agent.state.error).toBeNull()
     })
 
@@ -439,10 +443,20 @@ describe('Agent', () => {
         return okStep()
       })
       const agent = new Agent(kernel, defaultOptions({ stream }))
-      agent.followUp(userEntry('follow up'))
+      // start first run, queue follow-up while running
       agent.prompt(userEntry('hi'))
+      agent.followUp(userEntry('follow up'))
       await agent.waitForIdle()
       expect(callCount).toBeGreaterThanOrEqual(2)
+    })
+
+    it('follow-up when idle starts a new run immediately', async () => {
+      const kernel = createKernel()
+      kernel.append(userEntry('prior context'))
+      const agent = new Agent(kernel, defaultOptions())
+      agent.followUp(userEntry('follow up'))
+      expect(agent.state.isRunning).toBe(true)
+      await agent.waitForIdle()
     })
   })
 

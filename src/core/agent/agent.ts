@@ -194,12 +194,16 @@ export class Agent {
   }
 
   /**
-   * Queue a follow-up message to be processed after the current run completes.
-   * Causes the outer loop to continue rather than stop when the agent would
-   * otherwise go idle.
+   * Send one or more entries to the agent.
+   * If idle, starts a new run immediately. If already running, queues the
+   * entries for the next outer-loop iteration (same behaviour as before).
    */
   followUp(entries: AgentEntry | AgentEntry[]): void {
     this._followUpQueue.push(...(Array.isArray(entries) ? entries : [entries]))
+    if (!this.state.isRunning) {
+      this._error = null
+      this._run()
+    }
   }
 
   // ── Abort ───────────────────────────────────────────────────────────────
