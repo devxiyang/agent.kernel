@@ -53,6 +53,10 @@ export function runLoop(
 
 // ─── _run ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Core async driver for the agent loop.
+ * Runs entirely in the background; all output is pushed into `stream`.
+ */
 async function _run(
   kernel:  AgentKernel,
   config:  AgentConfig,
@@ -236,6 +240,10 @@ async function _run(
 
 // ─── executeTools ─────────────────────────────────────────────────────────────
 
+/**
+ * Dispatcher: routes to sequential or parallel execution based on config.
+ * Returns the aggregated tool results and any steering messages that arrived.
+ */
 async function executeTools(
   toolCalls:           ToolCallInfo[],
   tools:               AgentTool[],
@@ -252,6 +260,11 @@ async function executeTools(
   return executeToolsSequential(toolCalls, tools, kernel, stream, signal, getSteeringMessages, toolTimeout)
 }
 
+/**
+ * Execute tool calls one at a time. After each call, check for steering messages.
+ * If steering arrives, skip the remaining tools (writing "interrupted" results so
+ * the kernel stays consistent) and return the steering entries to the caller.
+ */
 async function executeToolsSequential(
   toolCalls:           ToolCallInfo[],
   tools:               AgentTool[],
@@ -293,6 +306,12 @@ async function executeToolsSequential(
   return { steeringMessages, toolResults }
 }
 
+/**
+ * Execute all tool calls concurrently with Promise.allSettled.
+ * Each tool gets its own AbortController linked to the parent signal.
+ * Steering is checked once after all tools complete; if present, all results
+ * are discarded and "interrupted" placeholders are written to the kernel.
+ */
 async function executeToolsParallel(
   toolCalls:           ToolCallInfo[],
   tools:               AgentTool[],
@@ -352,6 +371,11 @@ async function executeToolsParallel(
   return { steeringMessages: steeringArrived ? steeringMessages : undefined, toolResults }
 }
 
+/**
+ * Validate input and execute a single tool call.
+ * Wraps execution with an optional timeout. Any thrown error is converted to
+ * an error ToolResult rather than propagating (keeps the loop alive).
+ */
 async function runSingleTool(
   tc:          ToolCallInfo,
   tools:       AgentTool[],
@@ -384,6 +408,10 @@ async function runSingleTool(
 
 // ─── withTimeout ──────────────────────────────────────────────────────────────
 
+/**
+ * Race a promise against a deadline. Rejects with a timeout error if the
+ * promise does not settle within `ms` milliseconds. Clears the timer on abort.
+ */
 function withTimeout<T>(promise: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`Tool timed out after ${ms}ms`)), ms)
@@ -395,6 +423,10 @@ function withTimeout<T>(promise: Promise<T>, ms: number, signal?: AbortSignal): 
 
 // ─── withRetry ────────────────────────────────────────────────────────────────
 
+/**
+ * Retry `fn` up to `opts.maxAttempts` times with a fixed `opts.delayMs` pause
+ * between attempts. Aborts immediately if the signal is already cancelled.
+ */
 async function withRetry<T>(
   fn: () => Promise<T>,
   opts: { maxAttempts: number; delayMs: number },
@@ -415,6 +447,7 @@ async function withRetry<T>(
 
 // ─── accumulateUsage ──────────────────────────────────────────────────────────
 
+/** Add per-step token/cost counters into the running totals for the whole run. */
 function accumulateUsage(acc: Usage, step: Usage): void {
   acc.input      += step.input
   acc.output     += step.output
@@ -433,6 +466,11 @@ function accumulateUsage(acc: Usage, step: Usage): void {
 type ValidationOk  = { ok: true;  value: Record<string, unknown> }
 type ValidationErr = { ok: false; content: string }
 
+/**
+ * Validate and coerce tool input against its TypeBox schema.
+ * Returns the cleaned value on success, or a human-readable error string on failure.
+ * If the tool has no schema, the raw input is passed through unchanged.
+ */
 function validateInput(
   tool:  AgentTool,
   input: Record<string, unknown>,
@@ -450,6 +488,10 @@ function validateInput(
 
 // ─── skipTool ─────────────────────────────────────────────────────────────────
 
+/**
+ * Write an "interrupted" tool_result placeholder for a skipped tool call.
+ * Used when steering arrives mid-batch so the kernel never has unmatched tool calls.
+ */
 function skipTool(
   toolCallId: string,
   toolName:   string,

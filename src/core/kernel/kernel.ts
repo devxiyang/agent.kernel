@@ -15,8 +15,21 @@ import type {
 } from './types'
 import { COMPACTION_TYPE } from './types'
 
+/**
+ * Kernel — conversation state manager and optional JSONL persistence layer.
+ *
+ * Maintains a linked tree of StoredEntry nodes (parentId → id) that models the
+ * full conversation history including branches and compaction. The "current branch"
+ * is the path from the root to _leafId.
+ *
+ * Two files are written per session:
+ *   - kernel.jsonl — current branch only (rewritten on compact)
+ *   - log.jsonl    — append-only full history (never compacted); for UI display
+ */
+
 // ─── Factory ──────────────────────────────────────────────────────────────────
 
+/** Create a kernel. Pass options for file-backed persistence; omit for in-memory (tests). */
 export function createKernel(options?: KernelOptions): AgentKernel {
   return new Kernel(options)
 }
@@ -24,14 +37,21 @@ export function createKernel(options?: KernelOptions): AgentKernel {
 // ─── Kernel implementation ────────────────────────────────────────────────────
 
 class Kernel implements AgentKernel {
+  /** All stored entries indexed by id — the in-memory conversation tree. */
   private readonly byId = new Map<number, StoredEntry>()
+  /** Next id to assign on append. */
   private nextId           = 0
+  /** Input tokens from the most recent assistant entry (tracks context window usage). */
   private tokenUsed        = 0
+  /** Configurable context size cap; Infinity until the caller sets budget.set(). */
   private tokenLimit       = Number.POSITIVE_INFINITY
 
+  /** Absolute path to kernel.jsonl, or undefined when running in-memory. */
   private readonly kernelPath: string | undefined
+  /** Absolute path to log.jsonl, or undefined when running in-memory. */
   private readonly logPath:    string | undefined
 
+  /** The id of the most recent entry on the current branch (the "tip"). */
   private _leafId: number | null = null
 
   readonly budget: TokenBudget
@@ -67,6 +87,10 @@ class Kernel implements AgentKernel {
 
   // ─── Log ──────────────────────────────────────────────────────────────────
 
+  /**
+   * Write an entry to the in-memory tree and (if configured) to both
+   * kernel.jsonl and log.jsonl. Advances the leaf pointer.
+   */
   append(entry: AgentEntry): AppendResult {
     const result = this.write(entry)
     if (result.ok && this.logPath) {
@@ -75,6 +99,7 @@ class Kernel implements AgentKernel {
     return result
   }
 
+  /** Return all entries on the current branch in chronological order (root → leaf). */
   read(): StoredEntry[] {
     if (this._leafId === null) return []
     return this.walkBranch(this._leafId)
@@ -82,6 +107,12 @@ class Kernel implements AgentKernel {
 
   // ─── Compaction ──────────────────────────────────────────────────────────
 
+  /**
+   * Replace entries [fromId, toId] with a single summary entry.
+   * Writes a compaction marker to kernel.jsonl, materialises the summary in memory,
+   * then rewrites kernel.jsonl to contain only the current branch (no markers).
+   * Also appends the summary to log.jsonl as a divider.
+   */
   compact(fromId: number, toId: number, summaryText: string): AppendResult {
     const summaryEntry: AgentEntry = { type: 'summary', payload: { text: summaryText } }
 
@@ -151,6 +182,7 @@ class Kernel implements AgentKernel {
 
   // ─── Private ──────────────────────────────────────────────────────────────
 
+  /** Internal: assign id/parentId/timestamp, update byId and leafId, persist to kernel.jsonl. */
   private write(entry: AgentEntry): AppendResult {
     const record = {
       ...normalizeEntry(entry),
@@ -173,6 +205,7 @@ class Kernel implements AgentKernel {
     return { ok: true, id: record.id }
   }
 
+  /** Write a raw compaction marker record to kernel.jsonl and advance leafId. */
   private writeCompaction(entry: CompactionEntry): AppendResult {
     const record = {
       ...entry,
@@ -190,6 +223,11 @@ class Kernel implements AgentKernel {
     return { ok: true, id: record.id }
   }
 
+  /**
+   * Apply a compaction in-memory: delete the compacted range from byId,
+   * insert the summary at the compaction slot, and rewrite kernel.jsonl
+   * to hold only the clean current branch.
+   */
   private materialize(fromId: number, toId: number, summary: AgentEntry): void {
     const compactionId = this._leafId!
 
@@ -220,6 +258,7 @@ class Kernel implements AgentKernel {
     }
   }
 
+  /** Walk the parentId chain from `fromId` back to the root, returning entries root-first. */
   private walkBranch(fromId: number): StoredEntry[] {
     const path: StoredEntry[] = []
     let current = this.byId.get(fromId)
@@ -230,6 +269,7 @@ class Kernel implements AgentKernel {
     return path
   }
 
+  /** Replay kernel.jsonl on startup to restore the in-memory tree and leafId. */
   private loadFromFile(filePath: string): void {
     const content = readFileSync(filePath, 'utf-8')
     const lines = content.split('\n').filter(line => line.trim() !== '')
@@ -252,6 +292,10 @@ class Kernel implements AgentKernel {
 
 // ─── entryToMessages ──────────────────────────────────────────────────────────
 
+/**
+ * Convert a single AgentEntry to zero or more provider-agnostic AgentMessages.
+ * Summary entries become user messages with a "[Context Summary]" prefix.
+ */
 function entryToMessages(entry: AgentEntry): AgentMessage[] {
   switch (entry.type) {
     case 'user': {
@@ -313,11 +357,13 @@ function normalizeContentPart(part: ContentPart): ContentPart {
   return { ...part, data: normalizeData(part.data) }
 }
 
+/** Convert Uint8Array to base64; pass through strings unchanged. */
 function normalizeData(value: DataContent): string {
   if (value instanceof Uint8Array) return bufferToBase64(value)
   return value  // already a base64 string
 }
 
+/** Encode raw bytes to a base64 string for JSONL storage. */
 function bufferToBase64(bytes: Uint8Array): string {
   let binary = ''
   for (let i = 0; i < bytes.byteLength; i++) {

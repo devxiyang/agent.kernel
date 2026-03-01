@@ -1,3 +1,11 @@
+/**
+ * Type definitions for the Agent module.
+ *
+ * Covers the provider-agnostic LLM streaming contract (StreamFn / LLMStreamEvent),
+ * tool definitions (AgentTool / ToolResult), execution hooks (ToolWrapHooks),
+ * agent configuration (AgentConfig / AgentOptions), and the event bus (AgentEvent).
+ */
+
 import type { TObject, Static } from '@sinclair/typebox'
 import type {
   Usage,
@@ -18,13 +26,22 @@ export type {
 
 // ─── LLM stream abstraction ───────────────────────────────────────────────────
 
+/**
+ * Real-time events emitted by the provider during a single LLM call.
+ * The loop forwards these to the UI event stream as they arrive.
+ */
 export type LLMStreamEvent =
   | { type: 'text-delta';      delta: string }
   | { type: 'reasoning-delta'; delta: string }
   | { type: 'tool-call'; toolCallId: string; toolName: string; input: Record<string, unknown> }
 
+/** Reason the LLM stopped generating in a given step. */
 export type LLMStopReason = 'stop' | 'tool_use' | 'length' | 'content_filter' | (string & {})
 
+/**
+ * Resolved value returned by StreamFn after a single LLM call completes.
+ * Contains the full text/reasoning, all tool calls requested, and token usage.
+ */
 export type LLMStepResult = {
   text:       string
   reasoning?: string
@@ -138,20 +155,35 @@ export type ToolResultInfo = {
   details?:   unknown
 }
 
+/**
+ * Runtime configuration passed to runLoop on each execution.
+ * Most fields mirror AgentOptions; the queue-drain callbacks are wired by Agent.
+ */
 export interface AgentConfig {
+  /** Provider-injected streaming function. */
   stream:    StreamFn
+  /** Tools made available to the LLM for this run. */
   tools:     AgentTool[]
+  /** Maximum number of LLM + tool-execution cycles before the loop stops. */
   maxSteps:  number
+  /** Abort signal forwarded to stream calls and tool executions. */
   signal?:   AbortSignal
 
+  /** Returns queued steering entries; called between tool calls and before each LLM step. */
   getSteeringMessages?: () => Promise<AgentEntry[]>
+  /** Returns queued follow-up entries; checked after the agent would otherwise stop. */
   getFollowUpMessages?: () => Promise<AgentEntry[]>
 
+  /**
+   * Optional hook to modify or replace the message array before each LLM call.
+   * Useful for injecting system context, filtering, or summarising long threads.
+   */
   transformContext?: (
     messages: AgentMessage[],
     signal?:  AbortSignal,
   ) => Promise<AgentMessage[]>
 
+  /** Called after every completed LLM step. Useful for side-effects or logging. */
   onStepEnd?: (kernel: AgentKernel, stepNumber: number) => Promise<void>
 
   /** Run tool calls concurrently. Default: false (sequential). */
@@ -172,6 +204,21 @@ export interface AgentConfig {
 
 // ─── Agent events ─────────────────────────────────────────────────────────────
 
+/**
+ * All events emitted by the agent loop.
+ *
+ * Lifecycle:  agent_start → (turn_start → message_start → … → message_end
+ *             → tool_call* → tool_result* → turn_end → step_done)* → agent_end
+ *
+ * - agent_start / agent_end    — wraps the entire run
+ * - turn_start / turn_end      — wraps one LLM call + tool execution cycle
+ * - message_start / message_end — wraps the streaming assistant message
+ * - text_delta / reasoning_delta — incremental text chunks from the LLM
+ * - tool_call                  — a tool the LLM requested to execute
+ * - tool_update                — partial progress update from a long-running tool
+ * - tool_result                — final result after a tool finishes
+ * - step_done                  — emitted after tool results are written to kernel
+ */
 export type AgentEvent =
   | { type: 'agent_start' }
   | { type: 'agent_end'; error?: string }
@@ -188,13 +235,23 @@ export type AgentEvent =
 
 // ─── Agent result ─────────────────────────────────────────────────────────────
 
+/** Resolved value of EventStream.result() after a successful agent run. */
 export type AgentResult = {
+  /** Aggregated token usage across all steps in the run. */
   usage:      Usage
+  /** Wall-clock duration of the entire run in milliseconds. */
   durationMs: number
 }
 
 // ─── Agent options ────────────────────────────────────────────────────────────
 
+/**
+ * Controls how queued steering or follow-up messages are drained each time the
+ * agent checks the queue.
+ *
+ * - 'one-at-a-time' — dequeue a single entry per check (default)
+ * - 'all'           — dequeue all pending entries at once
+ */
 export type QueueMode = 'all' | 'one-at-a-time'
 
 export interface AgentOptions {

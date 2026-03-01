@@ -1,11 +1,26 @@
+/**
+ * Type definitions for the Kernel module.
+ *
+ * Covers token usage tracking, multimodal content parts, conversation entries
+ * (AgentEntry / AgentMessage), the persistent store format (StoredEntry),
+ * compaction, and the AgentKernel interface.
+ */
+
 // ─── Usage ────────────────────────────────────────────────────────────────────
 
+/** Token counts and estimated cost for a single LLM call or an aggregated run. */
 export type Usage = {
+  /** Tokens in the prompt (input to the model). */
   input:      number
+  /** Tokens in the completion (output from the model). */
   output:     number
+  /** Tokens read from the prompt cache. */
   cacheRead:  number
+  /** Tokens written to the prompt cache. */
   cacheWrite: number
+  /** Sum of all token categories. */
   totalTokens: number
+  /** Estimated cost breakdown in USD. */
   cost: {
     input:      number
     output:     number
@@ -58,14 +73,25 @@ export type ContentPart = TextPart | ImagePart | AudioPart | VideoPart | FilePar
 
 // ─── AgentEntry ───────────────────────────────────────────────────────────────
 
+/** Reason the model stopped generating. 'error' and 'aborted' are set by the loop, not the provider. */
 export type StopReason = 'stop' | 'tool_use' | 'error' | 'aborted' | 'length' | 'content_filter' | (string & {})
 
+/** Minimal descriptor of a single tool invocation requested by the LLM. */
 export type ToolCallInfo = {
   toolCallId: string
   toolName:   string
+  /** Raw JSON object the LLM produced as the tool's arguments. */
   input:      Record<string, unknown>
 }
 
+/**
+ * A single turn in the conversation, as stored in the kernel.
+ *
+ * - user        — one or more content parts from the human
+ * - assistant   — model response: text, optional reasoning, and/or tool calls
+ * - tool_result — result of executing a tool requested by the model
+ * - summary     — compacted representation of a range of earlier entries
+ */
 export type AgentEntry =
   | { type: 'user';        payload: { parts: ContentPart[] } }
   | { type: 'assistant';   payload: { text: string; reasoning?: string; toolCalls: ToolCallInfo[]; stopReason?: StopReason; error?: string }; usage?: Usage }
@@ -74,6 +100,11 @@ export type AgentEntry =
 
 // ─── AgentMessage (provider-agnostic LLM message format) ─────────────────────
 
+/**
+ * Normalised message format passed to StreamFn.
+ * Provider adapters translate this into their own SDK's message shape.
+ * Three roles mirror the OpenAI / Anthropic convention: user, assistant, tool.
+ */
 export type AgentMessage =
   | {
     role: 'user'
@@ -100,22 +131,35 @@ export type AgentMessage =
 
 // ─── Stored entry ─────────────────────────────────────────────────────────────
 
+/**
+ * An AgentEntry decorated with persistence metadata.
+ * Forms a linked tree (parentId → id) that supports conversation branching.
+ */
 export type StoredEntry = AgentEntry & {
+  /** Auto-incrementing unique identifier within a session. */
   readonly id:        number
+  /** ID of the preceding entry on this branch, or null for the root. */
   readonly parentId:  number | null
+  /** Unix timestamp (ms) at which this entry was written. */
   readonly timestamp: number
 }
 
 // ─── Append result ────────────────────────────────────────────────────────────
 
+/** Return value of kernel.append() and kernel.compact(). */
 export type AppendResult =
   | { ok: true;  id: number }
   | { ok: false; reason: string }
 
 // ─── Compaction ───────────────────────────────────────────────────────────────
 
+/** Sentinel type string used to identify compaction records in kernel.jsonl. */
 export const COMPACTION_TYPE = '__compaction__' as const
 
+/**
+ * A compaction marker written to kernel.jsonl. Records the original entry range
+ * so that a compact can be replayed on load, then replaced in-memory by a summary.
+ */
 export type CompactionEntry = {
   type:    typeof COMPACTION_TYPE
   payload: { fromId: number; toId: number; summary: AgentEntry }
@@ -124,9 +168,16 @@ export type CompactionEntry = {
 
 // ─── Token budget ─────────────────────────────────────────────────────────────
 
+/**
+ * Tracks the context window utilisation for the current session.
+ * The loop checks `used >= limit` to decide whether to fire `onContextFull`.
+ */
 export interface TokenBudget {
+  /** Tokens consumed by the last assistant step (from usage.input). */
   readonly used:  number
+  /** Maximum allowed context size before compaction is triggered. */
   readonly limit: number
+  /** Set the context size limit (e.g. model's context window * 0.8). */
   set(limit: number): void
 }
 

@@ -1,3 +1,10 @@
+/**
+ * @module agent-kernel/kernel
+ *
+ * Public surface of the Kernel module. Exports all types, the createKernel factory,
+ * and session management utilities (listSessions, deleteSession, updateSessionMeta).
+ */
+
 export type {
   Usage,
   DataContent,
