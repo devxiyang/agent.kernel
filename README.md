@@ -17,7 +17,7 @@ A provider-agnostic agent runtime for TypeScript. Bring your own LLM — `agent-
 - **Persistent sessions** — optional file-backed conversation history, survives restarts
 - **Conversation compaction** — replace old entries with a summary to stay within context limits
 - **Auto-compaction hook** — `onContextFull` fires when the token budget is reached
-- **Steering & follow-up** — inject messages mid-run without re-prompting
+- **Steering & follow-up** — inject messages mid-run; steering immediately aborts all running tools via `AbortSignal`
 - **Stream error retry** — automatic retry with configurable delay for transient LLM errors
 - **Session metadata** — attach titles and custom fields to sessions; query with `listSessions`
 - **Kernel cache** — LRU + TTL in-memory cache for session kernels
@@ -120,20 +120,22 @@ Use `followUp` when you don't want to manage the agent's running state yourself.
 
 ### Steering (mid-run interruption)
 
-`steer` injects a message that the loop picks up *between tool calls* in the current run. Unlike `followUp`, it interrupts the current turn rather than waiting for the run to finish.
+`steer` injects a message that interrupts the current run immediately. Unlike `followUp`, it does not wait for the run to finish.
 
 ```ts
 // Safe to call while the agent is running
 agent.steer({ type: 'user', payload: { parts: [{ type: 'text', text: 'Actually, focus only on security.' }] } })
 ```
 
-When a steering message arrives, the loop skips any remaining tool calls in the current batch (writing `"Skipped: user interrupted."` results to keep the conversation consistent) and immediately processes the steering message.
+When `steer` is called, the agent **immediately signals all running tools to abort** via `AbortSignal`. Tools that respect the signal stop early; the remaining tool calls in the batch are skipped (writing `"Skipped: user interrupted."` results to keep the conversation consistent). The steering message is then processed in the next LLM step.
+
+> **Tool contract**: `AgentTool.execute` receives a required `signal: AbortSignal`. Tools **must** propagate this signal to any I/O (fetch, child processes, etc.) and check it in long-running loops. A tool that ignores the signal will run to completion before the loop can proceed — treat this as an implementation bug in the tool.
 
 **`steer` vs `followUp`**
 
 | | `followUp` | `steer` |
 |---|---|---|
-| When processed | After the current run ends | Between tool calls in the current run |
+| When processed | After the current run ends | Immediately; aborts running tools |
 | Effect | Continues the outer loop | Interrupts the current tool batch |
 | Use case | Next user turn | Real-time redirection mid-task |
 
@@ -411,6 +413,8 @@ type SessionInfo = {
 
 TypeBox schemas in `parameters` drive both runtime validation and the JSON Schema passed to the LLM. The `execute` input type is inferred — no manual annotation needed.
 
+The `signal: AbortSignal` parameter is **required** (changed in v0.1.0). Pass it to any underlying I/O so tools can be interrupted when the user calls `agent.steer()`.
+
 ```ts
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@devxiyang/agent-kernel'
@@ -424,8 +428,10 @@ const searchTool: AgentTool<typeof searchSchema> = {
   name:        'search_docs',
   description: 'Search project documentation by query.',
   parameters:  searchSchema,
-  execute: async (_toolCallId, input) => {
+  execute: async (_toolCallId, input, signal) => {
     // input: { query: string; limit?: number }
+    // Always propagate signal to I/O so steering can interrupt immediately
+    const response = await fetch(`/search?q=${input.query}`, { signal })
     return {
       content:  `Found results for: ${input.query}`,
       isError:  false,
