@@ -14,7 +14,7 @@
  *   - Compaction decisions (caller checks kernel.contextSize and calls kernel.compact())
  */
 
-import type { AgentKernel } from '../kernel'
+import type { AgentKernel, KernelOptions } from '../kernel'
 import { createKernel } from '../kernel'
 import { runLoop } from './loop'
 import type {
@@ -53,6 +53,10 @@ export class Agent {
   private _onStepEnd:        AgentOptions['onStepEnd']
   private _steeringMode:     QueueMode
   private _followUpMode:     QueueMode
+  private _parallelTools:    AgentOptions['parallelTools']
+  private _onContextFull:    AgentOptions['onContextFull']
+  private _toolTimeout:      AgentOptions['toolTimeout']
+  private _retryOnError:     AgentOptions['retryOnError']
 
   private _abortController: AbortController | null = null
   private _runningPromise:  Promise<AgentResult | undefined> | null = null
@@ -78,6 +82,10 @@ export class Agent {
     this._onStepEnd        = options.onStepEnd
     this._steeringMode     = options.steeringMode ?? 'one-at-a-time'
     this._followUpMode     = options.followUpMode ?? 'one-at-a-time'
+    this._parallelTools    = options.parallelTools
+    this._onContextFull    = options.onContextFull
+    this._toolTimeout      = options.toolTimeout
+    this._retryOnError     = options.retryOnError
   }
 
   // ── State ──────────────────────────────────────────────────────────────
@@ -202,6 +210,10 @@ export class Agent {
       onStepEnd:           this._onStepEnd,
       getSteeringMessages: () => this._drainSteering(),
       getFollowUpMessages: () => this._drainFollowUp(),
+      parallelTools:       this._parallelTools,
+      onContextFull:       this._onContextFull,
+      toolTimeout:         this._toolTimeout,
+      retryOnError:        this._retryOnError,
     })
 
     this._runningPromise = this._consume(eventStream)
@@ -307,7 +319,7 @@ export class Agent {
 
 export interface AgentSessionOptions extends AgentOptions {
   /** Session persistence. Omit for in-memory mode (testing). */
-  session?: { dir: string; sessionId: string }
+  session?: { dir: string; sessionId: string; meta?: KernelOptions['meta'] }
 }
 
 export function createAgent(options: AgentSessionOptions): Agent {

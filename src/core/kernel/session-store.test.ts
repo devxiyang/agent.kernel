@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { listSessions, deleteSession } from './session-store.js'
+import { listSessions, deleteSession, updateSessionMeta } from './session-store.js'
 import { createKernel } from './kernel.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -105,5 +105,95 @@ describe('deleteSession', () => {
     const list = listSessions(baseDir)
     expect(list).toHaveLength(1)
     expect(list[0].sessionId).toBe('keep-me')
+  })
+})
+
+// ─── session metadata ─────────────────────────────────────────────────────────
+
+describe('session metadata', () => {
+  it('listSessions returns meta: null for sessions with no meta.json', () => {
+    // Create a directory without going through createKernel (so no meta.json)
+    mkdirSync(join(baseDir, 'bare-sess'), { recursive: true })
+    writeFileSync(join(baseDir, 'bare-sess', 'log.jsonl'), '')
+    const info = listSessions(baseDir)[0]
+    expect(info.meta).toBeNull()
+  })
+
+  it('listSessions returns meta including createdAt when session is created via createKernel', () => {
+    seedSession('meta-sess')
+    const info = listSessions(baseDir)[0]
+    expect(info.meta).not.toBeNull()
+    expect(typeof info.meta!.createdAt).toBe('number')
+    expect(info.meta!.createdAt).toBeGreaterThan(0)
+  })
+
+  it('listSessions returns title when session is created with meta', () => {
+    createKernel({ dir: baseDir, sessionId: 'titled-sess', meta: { title: 'My Session' } })
+    const info = listSessions(baseDir)[0]
+    expect(info.meta?.title).toBe('My Session')
+  })
+
+  it('returns meta: null for empty session dir without meta.json', () => {
+    mkdirSync(join(baseDir, 'no-meta'), { recursive: true })
+    const info = listSessions(baseDir)[0]
+    expect(info.meta).toBeNull()
+  })
+
+  it('sets createdAt once and does not overwrite it on subsequent opens', () => {
+    createKernel({ dir: baseDir, sessionId: 'stable-sess' })
+    const firstInfo = listSessions(baseDir)[0]
+    const firstCreatedAt = firstInfo.meta!.createdAt
+
+    // Re-open the same session
+    createKernel({ dir: baseDir, sessionId: 'stable-sess' })
+    const secondInfo = listSessions(baseDir)[0]
+    expect(secondInfo.meta!.createdAt).toBe(firstCreatedAt)
+  })
+
+  it('merges new meta fields on subsequent opens without touching createdAt', () => {
+    createKernel({ dir: baseDir, sessionId: 'merge-sess' })
+    const { meta: first } = listSessions(baseDir)[0]
+    const originalCreatedAt = first!.createdAt
+
+    // Re-open with a title
+    createKernel({ dir: baseDir, sessionId: 'merge-sess', meta: { title: 'Added later' } })
+    const { meta: second } = listSessions(baseDir)[0]
+
+    expect(second!.createdAt).toBe(originalCreatedAt)
+    expect(second!.title).toBe('Added later')
+  })
+})
+
+// ─── updateSessionMeta ────────────────────────────────────────────────────────
+
+describe('updateSessionMeta', () => {
+  it('merges new fields into existing meta', () => {
+    createKernel({ dir: baseDir, sessionId: 'upd-sess' })
+    updateSessionMeta(baseDir, 'upd-sess', { title: 'Updated Title' })
+    const info = listSessions(baseDir)[0]
+    expect(info.meta?.title).toBe('Updated Title')
+  })
+
+  it('does not overwrite createdAt', () => {
+    createKernel({ dir: baseDir, sessionId: 'prot-sess' })
+    const before = listSessions(baseDir)[0].meta!.createdAt
+
+    // TypeScript prevents passing createdAt, but test that the value is intact after update
+    updateSessionMeta(baseDir, 'prot-sess', { title: 'New Title' })
+    const after = listSessions(baseDir)[0].meta!.createdAt
+
+    expect(after).toBe(before)
+  })
+
+  it('is a no-op when the session does not have a meta.json', () => {
+    mkdirSync(join(baseDir, 'no-meta-sess'), { recursive: true })
+    expect(() => updateSessionMeta(baseDir, 'no-meta-sess', { title: 'x' })).not.toThrow()
+  })
+
+  it('overwrites an existing title when called twice', () => {
+    createKernel({ dir: baseDir, sessionId: 'retitle-sess', meta: { title: 'First' } })
+    updateSessionMeta(baseDir, 'retitle-sess', { title: 'Second' })
+    const info = listSessions(baseDir)[0]
+    expect(info.meta?.title).toBe('Second')
   })
 })

@@ -153,6 +153,21 @@ export interface AgentConfig {
   ) => Promise<AgentMessage[]>
 
   onStepEnd?: (kernel: AgentKernel, stepNumber: number) => Promise<void>
+
+  /** Run tool calls concurrently. Default: false (sequential). */
+  parallelTools?: boolean
+
+  /** Fired when context size reaches or exceeds budget.limit. Callback should call kernel.compact(). */
+  onContextFull?: (kernel: AgentKernel, stepNumber: number) => Promise<void>
+
+  /** Per-tool execution timeout in ms. Undefined = no timeout. */
+  toolTimeout?: number
+
+  /** Retry config for LLM stream errors. */
+  retryOnError?: {
+    maxAttempts: number
+    delayMs:     number
+  }
 }
 
 // ─── Agent events ─────────────────────────────────────────────────────────────
@@ -190,4 +205,8 @@ export interface AgentOptions {
   onStepEnd?:        AgentConfig['onStepEnd']
   steeringMode?:     QueueMode
   followUpMode?:     QueueMode
+  parallelTools?:    AgentConfig['parallelTools']
+  onContextFull?:    AgentConfig['onContextFull']
+  toolTimeout?:      AgentConfig['toolTimeout']
+  retryOnError?:     AgentConfig['retryOnError']
 }

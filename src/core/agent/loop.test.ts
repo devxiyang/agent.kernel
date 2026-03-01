@@ -5,6 +5,7 @@ import { createKernel } from '../kernel/kernel.js'
 import type {
   AgentConfig,
   AgentEvent,
+  AgentKernel,
   AgentTool,
   LLMStepResult,
   LLMStreamEvent,
@@ -59,7 +60,13 @@ async function collectEvents(
   const kernel = createKernel()
   // Seed a user message so there's something to send to the LLM
   kernel.append({ type: 'user', payload: { parts: [{ type: 'text', text: 'hi' }] } })
+  return collectEventsFromKernel(kernel, config)
+}
 
+async function collectEventsFromKernel(
+  kernel: AgentKernel,
+  config: AgentConfig,
+): Promise<{ events: AgentEvent[]; result: Awaited<ReturnType<typeof runLoop.prototype.result>> }> {
   const stream = runLoop(kernel, config)
   const events: AgentEvent[] = []
   for await (const e of stream) {
@@ -363,6 +370,338 @@ describe('runLoop', () => {
       const onStepEnd = vi.fn().mockResolvedValue(undefined)
       await collectEvents(baseConfig({ onStepEnd }))
       expect(onStepEnd).toHaveBeenCalledOnce()
+    })
+  })
+
+  describe('parallelTools', () => {
+    function makeTrackedTool(name: string, execOrder: string[], delayMs: number): AgentTool {
+      return {
+        name,
+        description: name,
+        execute: async () => {
+          execOrder.push(`${name}:start`)
+          await new Promise(r => setTimeout(r, delayMs))
+          execOrder.push(`${name}:end`)
+          return { content: `${name} done`, isError: false }
+        },
+      }
+    }
+
+    function twoToolStream(): ReturnType<typeof vi.fn> {
+      let callCount = 0
+      return vi.fn().mockImplementation(async () => {
+        callCount++
+        if (callCount === 1) {
+          return stepResult({
+            toolCalls: [
+              { toolCallId: 'c1', toolName: 'toolA', input: {} },
+              { toolCallId: 'c2', toolName: 'toolB', input: {} },
+            ],
+            stopReason: 'tool_use',
+          })
+        }
+        return stepResult()
+      })
+    }
+
+    it('runs tools sequentially by default', async () => {
+      const execOrder: string[] = []
+      await collectEvents(baseConfig({
+        stream: twoToolStream(),
+        tools:  [makeTrackedTool('toolA', execOrder, 10), makeTrackedTool('toolB', execOrder, 10)],
+      }))
+      expect(execOrder).toEqual(['toolA:start', 'toolA:end', 'toolB:start', 'toolB:end'])
+    })
+
+    it('runs tools concurrently when parallelTools: true (both start before either ends)', async () => {
+      const execOrder: string[] = []
+      await collectEvents(baseConfig({
+        stream:        twoToolStream(),
+        tools:         [makeTrackedTool('toolA', execOrder, 30), makeTrackedTool('toolB', execOrder, 30)],
+        parallelTools: true,
+      }))
+      // Both start before either finishes
+      expect(execOrder[0]).toBe('toolA:start')
+      expect(execOrder[1]).toBe('toolB:start')
+      expect(execOrder).toHaveLength(4)
+    })
+
+    it('collects results in toolCalls order when parallel', async () => {
+      const execute = vi.fn()
+        .mockResolvedValueOnce({ content: 'A result', isError: false })
+        .mockResolvedValueOnce({ content: 'B result', isError: false })
+
+      let callCount = 0
+      const streamFn = vi.fn().mockImplementation(async () => {
+        callCount++
+        if (callCount === 1) {
+          return stepResult({
+            toolCalls: [
+              { toolCallId: 'c1', toolName: 'toolA', input: {} },
+              { toolCallId: 'c2', toolName: 'toolB', input: {} },
+            ],
+            stopReason: 'tool_use',
+          })
+        }
+        return stepResult()
+      })
+
+      const { events } = await collectEvents(baseConfig({
+        stream:        streamFn,
+        tools:         [
+          { name: 'toolA', description: 'A', execute },
+          { name: 'toolB', description: 'B', execute },
+        ],
+        parallelTools: true,
+      }))
+
+      const results = events.filter(e => e.type === 'tool_result') as Array<{
+        type: 'tool_result'; toolCallId: string; content: string
+      }>
+      expect(results).toHaveLength(2)
+      // Both tools should have produced results
+      expect(results.some(r => r.toolCallId === 'c1')).toBe(true)
+      expect(results.some(r => r.toolCallId === 'c2')).toBe(true)
+    })
+
+    it('discards parallel tool results and uses skipTool when steering arrives', async () => {
+      let toolsStarted = false
+      const execute = vi.fn().mockImplementation(async () => {
+        toolsStarted = true
+        return { content: 'done', isError: false }
+      })
+
+      let callCount = 0
+      const streamFn = vi.fn().mockImplementation(async () => {
+        callCount++
+        if (callCount === 1) {
+          return stepResult({
+            toolCalls: [
+              { toolCallId: 'c1', toolName: 'tool1', input: {} },
+              { toolCallId: 'c2', toolName: 'tool2', input: {} },
+            ],
+            stopReason: 'tool_use',
+          })
+        }
+        return stepResult()
+      })
+
+      // Return steering only after the initial pre-loop check (when tools have started)
+      let steeringCalls = 0
+      const getSteeringMessages = vi.fn().mockImplementation(async () => {
+        steeringCalls++
+        if (steeringCalls > 1 && toolsStarted) {
+          return [{ type: 'user' as const, payload: { parts: [{ type: 'text' as const, text: 'interrupt' }] } }]
+        }
+        return []
+      })
+
+      const { events } = await collectEvents(baseConfig({
+        stream:              streamFn,
+        tools:               [
+          { name: 'tool1', description: 't1', execute },
+          { name: 'tool2', description: 't2', execute },
+        ],
+        parallelTools:       true,
+        getSteeringMessages,
+      }))
+
+      // Both tools actually ran (parallel — can't stop them mid-flight)
+      expect(execute).toHaveBeenCalledTimes(2)
+
+      // All results are replaced with skipTool
+      const toolResults = events.filter(e => e.type === 'tool_result') as Array<{ isError: boolean }>
+      expect(toolResults).toHaveLength(2)
+      expect(toolResults.every(r => r.isError)).toBe(true)
+    })
+  })
+
+  describe('toolTimeout', () => {
+    it('returns an error result when a tool exceeds the timeout', async () => {
+      const slowTool: AgentTool = {
+        name:        'slow',
+        description: 'A slow tool',
+        execute: async () => {
+          await new Promise(r => setTimeout(r, 500))
+          return { content: 'never', isError: false }
+        },
+      }
+
+      let callCount = 0
+      const streamFn = vi.fn().mockImplementation(async () => {
+        callCount++
+        if (callCount === 1) {
+          return stepResult({
+            toolCalls:  [{ toolCallId: 'c1', toolName: 'slow', input: {} }],
+            stopReason: 'tool_use',
+          })
+        }
+        return stepResult()
+      })
+
+      const { events } = await collectEvents(baseConfig({
+        stream:      streamFn,
+        tools:       [slowTool],
+        toolTimeout: 30,
+      }))
+
+      const toolResultEvent = events.find(e => e.type === 'tool_result') as {
+        type: 'tool_result'; isError: boolean; content: string
+      }
+      expect(toolResultEvent?.isError).toBe(true)
+      expect(toolResultEvent?.content).toMatch(/timed out/)
+    })
+
+    it('does not interfere when tool completes within the timeout', async () => {
+      const fastTool: AgentTool = {
+        name:        'fast',
+        description: 'A fast tool',
+        execute: async () => ({ content: 'quick', isError: false }),
+      }
+
+      let callCount = 0
+      const streamFn = vi.fn().mockImplementation(async () => {
+        callCount++
+        if (callCount === 1) {
+          return stepResult({
+            toolCalls:  [{ toolCallId: 'c1', toolName: 'fast', input: {} }],
+            stopReason: 'tool_use',
+          })
+        }
+        return stepResult()
+      })
+
+      const { events } = await collectEvents(baseConfig({
+        stream:      streamFn,
+        tools:       [fastTool],
+        toolTimeout: 500,
+      }))
+
+      const toolResultEvent = events.find(e => e.type === 'tool_result') as {
+        type: 'tool_result'; isError: boolean; content: string
+      }
+      expect(toolResultEvent?.isError).toBe(false)
+      expect(toolResultEvent?.content).toBe('quick')
+    })
+  })
+
+  describe('onContextFull', () => {
+    it('fires the callback when contextSize >= budget.limit', async () => {
+      const kernel = createKernel()
+      kernel.append({ type: 'user', payload: { parts: [{ type: 'text', text: 'hi' }] } })
+      kernel.budget.set(5) // limit = 5 tokens
+
+      const onContextFull = vi.fn().mockResolvedValue(undefined)
+      await collectEventsFromKernel(kernel, baseConfig({
+        stream:        mockStream(stepResult({ usage: makeUsage(10, 5) })), // input=10 >= limit=5
+        onContextFull,
+      }))
+
+      expect(onContextFull).toHaveBeenCalledOnce()
+      expect(onContextFull).toHaveBeenCalledWith(kernel, 1)
+    })
+
+    it('does not fire when budget.limit is Infinity (default)', async () => {
+      const onContextFull = vi.fn().mockResolvedValue(undefined)
+      await collectEvents(baseConfig({
+        stream:        mockStream(stepResult({ usage: makeUsage(1_000_000, 5) })),
+        onContextFull,
+      }))
+      expect(onContextFull).not.toHaveBeenCalled()
+    })
+
+    it('does not fire when contextSize is below budget.limit', async () => {
+      const kernel = createKernel()
+      kernel.append({ type: 'user', payload: { parts: [{ type: 'text', text: 'hi' }] } })
+      kernel.budget.set(100)
+
+      const onContextFull = vi.fn().mockResolvedValue(undefined)
+      await collectEventsFromKernel(kernel, baseConfig({
+        stream:        mockStream(stepResult({ usage: makeUsage(50, 5) })), // input=50 < limit=100
+        onContextFull,
+      }))
+
+      expect(onContextFull).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('retryOnError', () => {
+    it('retries a failing stream and succeeds on the final attempt', async () => {
+      let callCount = 0
+      const streamFn = vi.fn().mockImplementation(async () => {
+        callCount++
+        if (callCount < 3) throw new Error(`attempt ${callCount} failed`)
+        return stepResult()
+      })
+
+      const { events } = await collectEvents(baseConfig({
+        stream:       streamFn,
+        retryOnError: { maxAttempts: 3, delayMs: 0 },
+      }))
+
+      expect(streamFn).toHaveBeenCalledTimes(3)
+      const endEvent = events.find(e => e.type === 'agent_end') as { type: 'agent_end'; error?: string }
+      expect(endEvent?.error).toBeUndefined()
+    })
+
+    it('propagates the error when all attempts are exhausted', async () => {
+      const streamFn = vi.fn().mockRejectedValue(new Error('always fails'))
+
+      const { events } = await collectEvents(baseConfig({
+        stream:       streamFn,
+        retryOnError: { maxAttempts: 3, delayMs: 0 },
+      }))
+
+      expect(streamFn).toHaveBeenCalledTimes(3)
+      const endEvent = events.find(e => e.type === 'agent_end') as { type: 'agent_end'; error?: string }
+      expect(endEvent?.error).toBe('always fails')
+    })
+
+    it('does not retry when the abort signal is already triggered', async () => {
+      const controller = new AbortController()
+      const streamFn = vi.fn().mockImplementation(async () => {
+        controller.abort()
+        const err = new Error('aborted')
+        err.name = 'AbortError'
+        throw err
+      })
+
+      const { events } = await collectEvents(baseConfig({
+        stream:       streamFn,
+        signal:       controller.signal,
+        retryOnError: { maxAttempts: 5, delayMs: 0 },
+      }))
+
+      // The abort is detected in the catch block, so no retry
+      expect(streamFn).toHaveBeenCalledTimes(1)
+      const endEvent = events.find(e => e.type === 'agent_end') as { type: 'agent_end'; error?: string }
+      expect(endEvent?.error).toBeTruthy()
+    })
+
+    it('resets partial state so the committed error entry reflects only the final attempt', async () => {
+      // When all retries fail, the error entry written to the kernel should contain
+      // only partial content from the LAST attempt, not accumulated stale content.
+      let callCount = 0
+      const streamFn = vi.fn().mockImplementation(
+        async (_msgs: unknown, _tools: unknown, onEvent: (e: LLMStreamEvent) => void) => {
+          callCount++
+          // Each attempt emits its own text and then fails
+          onEvent({ type: 'text-delta', delta: callCount === 1 ? 'stale-text' : 'last-attempt-text' })
+          throw new Error(`attempt ${callCount} failed`)
+        },
+      )
+
+      const { events } = await collectEvents(baseConfig({
+        stream:       streamFn,
+        retryOnError: { maxAttempts: 2, delayMs: 0 },
+      }))
+
+      // The message_end entry (error path) should reflect only the final attempt's partial content
+      const messageEnd = events.find(e => e.type === 'message_end') as {
+        type: 'message_end'; entry: { type: 'assistant'; payload: { text: string } }
+      }
+      expect(messageEnd?.entry.payload.text).toBe('last-attempt-text')
+      expect(messageEnd?.entry.payload.text).not.toContain('stale-text')
     })
   })
 

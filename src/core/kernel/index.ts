@@ -21,6 +21,7 @@ export type {
   TokenBudget,
   AgentKernel,
   KernelOptions,
+  SessionMeta,
 } from './types'
 
 export { COMPACTION_TYPE } from './types'
@@ -28,4 +29,4 @@ export { COMPACTION_TYPE } from './types'
 export { createKernel } from './kernel'
 
 export type { SessionInfo } from './session-store'
-export { listSessions, deleteSession } from './session-store'
+export { listSessions, deleteSession, updateSessionMeta } from './session-store'

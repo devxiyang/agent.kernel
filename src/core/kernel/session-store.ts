@@ -1,5 +1,6 @@
-import { readdirSync, statSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { readdirSync, statSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import type { SessionMeta } from './types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -7,6 +8,7 @@ export type SessionInfo = {
   sessionId:    string
   updatedAt:    number // log.jsonl mtime in milliseconds
   messageCount: number // number of entries in log.jsonl
+  meta:         SessionMeta | null
 }
 
 // ─── listSessions ─────────────────────────────────────────────────────────────
@@ -40,7 +42,12 @@ export function listSessions(dir: string): SessionInfo[] {
     }
 
     if (!existsSync(logPath)) {
-      sessions.push({ sessionId, updatedAt: stat.mtimeMs, messageCount: 0 })
+      let meta: SessionMeta | null = null
+      const metaPath = join(sessionDir, 'meta.json')
+      if (existsSync(metaPath)) {
+        try { meta = JSON.parse(readFileSync(metaPath, 'utf-8')) } catch {}
+      }
+      sessions.push({ sessionId, updatedAt: stat.mtimeMs, messageCount: 0, meta })
       continue
     }
 
@@ -57,10 +64,34 @@ export function listSessions(dir: string): SessionInfo[] {
       // Malformed log — still include the session with what we have
     }
 
-    sessions.push({ sessionId, updatedAt, messageCount })
+    let meta: SessionMeta | null = null
+    const metaPath = join(sessionDir, 'meta.json')
+    if (existsSync(metaPath)) {
+      try { meta = JSON.parse(readFileSync(metaPath, 'utf-8')) } catch {}
+    }
+
+    sessions.push({ sessionId, updatedAt, messageCount, meta })
   }
 
   return sessions.sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+// ─── updateSessionMeta ────────────────────────────────────────────────────────
+
+/**
+ * Merge metadata fields into an existing session's meta.json.
+ * `createdAt` is protected and cannot be overwritten.
+ * Silent no-op if the session does not have a meta.json yet.
+ */
+export function updateSessionMeta(
+  dir:       string,
+  sessionId: string,
+  meta:      Partial<Omit<SessionMeta, 'createdAt'>>,
+): void {
+  const metaPath = join(dir, sessionId, 'meta.json')
+  if (!existsSync(metaPath)) return
+  const existing: SessionMeta = JSON.parse(readFileSync(metaPath, 'utf-8'))
+  writeFileSync(metaPath, JSON.stringify({ ...existing, ...meta }))
 }
 
 // ─── deleteSession ────────────────────────────────────────────────────────────

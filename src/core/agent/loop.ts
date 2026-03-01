@@ -29,6 +29,7 @@ import type {
   AgentEvent,
   AgentResult,
   AgentTool,
+  LLMStreamEvent,
   ToolCallInfo,
   ToolResult,
   ToolResultInfo,
@@ -106,29 +107,35 @@ async function _run(
         // Signal start of assistant message
         stream.push({ type: 'message_start', entry: { type: 'assistant', payload: { text: '', toolCalls: [] } } })
 
-        // Reset per-step partial tracking
-        partialToolCalls = []
-        stepText         = ''
-        stepReasoning    = ''
+        // Reset per-step partial tracking (also reset before each retry attempt)
+        const resetPartials = () => {
+          partialToolCalls = []
+          stepText         = ''
+          stepReasoning    = ''
+        }
+        resetPartials()
 
         // Call the LLM; onEvent forwards real-time events to the UI stream
-        const stepResult = await config.stream(
-          messages,
-          config.tools,
-          (event) => {
-            if (event.type === 'text-delta') {
-              stepText += event.delta
-              stream.push({ type: 'text_delta', delta: event.delta })
-            } else if (event.type === 'reasoning-delta') {
-              stepReasoning += event.delta
-              stream.push({ type: 'reasoning_delta', delta: event.delta })
-            } else if (event.type === 'tool-call') {
-              partialToolCalls.push({ toolCallId: event.toolCallId, toolName: event.toolName, input: event.input })
-              stream.push({ type: 'tool_call', toolCallId: event.toolCallId, toolName: event.toolName, input: event.input })
-            }
-          },
-          config.signal,
-        )
+        const makeOnEvent = () => (event: LLMStreamEvent) => {
+          if (event.type === 'text-delta') {
+            stepText += event.delta
+            stream.push({ type: 'text_delta', delta: event.delta })
+          } else if (event.type === 'reasoning-delta') {
+            stepReasoning += event.delta
+            stream.push({ type: 'reasoning_delta', delta: event.delta })
+          } else if (event.type === 'tool-call') {
+            partialToolCalls.push({ toolCallId: event.toolCallId, toolName: event.toolName, input: event.input })
+            stream.push({ type: 'tool_call', toolCallId: event.toolCallId, toolName: event.toolName, input: event.input })
+          }
+        }
+
+        const streamCall = () => {
+          resetPartials()
+          return config.stream(messages, config.tools, makeOnEvent(), config.signal)
+        }
+        const stepResult = config.retryOnError
+          ? await withRetry(streamCall, config.retryOnError, config.signal)
+          : await streamCall()
 
         stepNumber++
         accumulateUsage(totalUsage, stepResult.usage)
@@ -150,6 +157,11 @@ async function _run(
         stream.push({ type: 'step_done', stepNumber, usage: stepResult.usage })
         await config.onStepEnd?.(kernel, stepNumber)
 
+        // ── onContextFull hook ────────────────────────────────────────────
+        if (config.onContextFull && kernel.budget.limit < Infinity && kernel.contextSize >= kernel.budget.limit) {
+          await config.onContextFull(kernel, stepNumber)
+        }
+
         // ── Execute tool calls ────────────────────────────────────────────
         hasMoreToolCalls = stepResult.toolCalls.length > 0
         let turnToolResults: ToolResultInfo[] = []
@@ -162,6 +174,8 @@ async function _run(
             stream,
             config.signal,
             config.getSteeringMessages,
+            config.parallelTools ?? false,
+            config.toolTimeout,
           )
           turnToolResults    = result.toolResults
           steeringAfterTools = result.steeringMessages ?? null
@@ -229,6 +243,23 @@ async function executeTools(
   stream:              EventStream<AgentEvent, AgentResult>,
   signal:              AbortSignal | undefined,
   getSteeringMessages: AgentConfig['getSteeringMessages'],
+  parallelTools:       boolean,
+  toolTimeout:         number | undefined,
+): Promise<{ steeringMessages?: AgentEntry[]; toolResults: ToolResultInfo[] }> {
+  if (parallelTools) {
+    return executeToolsParallel(toolCalls, tools, kernel, stream, signal, getSteeringMessages, toolTimeout)
+  }
+  return executeToolsSequential(toolCalls, tools, kernel, stream, signal, getSteeringMessages, toolTimeout)
+}
+
+async function executeToolsSequential(
+  toolCalls:           ToolCallInfo[],
+  tools:               AgentTool[],
+  kernel:              AgentKernel,
+  stream:              EventStream<AgentEvent, AgentResult>,
+  signal:              AbortSignal | undefined,
+  getSteeringMessages: AgentConfig['getSteeringMessages'],
+  toolTimeout:         number | undefined,
 ): Promise<{ steeringMessages?: AgentEntry[]; toolResults: ToolResultInfo[] }> {
   let steeringMessages: AgentEntry[] | undefined
   const toolResults: ToolResultInfo[] = []
@@ -241,27 +272,7 @@ async function executeTools(
       continue
     }
 
-    const tool = tools.find((t) => t.name === tc.toolName)
-
-    let result: ToolResult
-
-    try {
-      if (!tool) throw new Error(`Tool not found: ${tc.toolName}`)
-
-      const validated = validateInput(tool, tc.input)
-      if (!validated.ok) {
-        result = { content: validated.content, isError: true }
-      } else {
-        result = await tool.execute(
-          tc.toolCallId,
-          validated.value,
-          signal,
-          (partial) => stream.push({ type: 'tool_update', toolCallId: tc.toolCallId, partial }),
-        )
-      }
-    } catch (err) {
-      result = { content: err instanceof Error ? err.message : String(err), isError: true }
-    }
+    const result = await runSingleTool(tc, tools, stream, signal, toolTimeout)
 
     const { content, isError, details } = result
     const toolResultEntry: AgentEntry = {
@@ -280,6 +291,126 @@ async function executeTools(
   }
 
   return { steeringMessages, toolResults }
+}
+
+async function executeToolsParallel(
+  toolCalls:           ToolCallInfo[],
+  tools:               AgentTool[],
+  kernel:              AgentKernel,
+  stream:              EventStream<AgentEvent, AgentResult>,
+  signal:              AbortSignal | undefined,
+  getSteeringMessages: AgentConfig['getSteeringMessages'],
+  toolTimeout:         number | undefined,
+): Promise<{ steeringMessages?: AgentEntry[]; toolResults: ToolResultInfo[] }> {
+  let steeringArrived = false
+
+  // Per-tool AbortControllers linked to the parent signal
+  const controllers = toolCalls.map(() => new AbortController())
+  if (signal) {
+    const onAbort = () => controllers.forEach(c => c.abort())
+    signal.addEventListener('abort', onAbort, { once: true })
+  }
+
+  // Run all tools concurrently
+  const settled = await Promise.allSettled(
+    toolCalls.map((tc, i) => runSingleTool(tc, tools, stream, controllers[i].signal, toolTimeout)),
+  )
+
+  // Check for steering after all tools complete
+  const steeringMessages = await getSteeringMessages?.() ?? []
+  if (steeringMessages.length > 0) {
+    steeringArrived = true
+  }
+
+  const toolResults: ToolResultInfo[] = []
+
+  for (let i = 0; i < toolCalls.length; i++) {
+    const tc = toolCalls[i]
+    const outcome = settled[i]
+
+    // If steering arrived, discard results and skip remaining
+    if (steeringArrived) {
+      const skipped = skipTool(tc.toolCallId, tc.toolName, kernel, stream)
+      toolResults.push({ toolCallId: tc.toolCallId, toolName: tc.toolName, ...skipped })
+      continue
+    }
+
+    const result: ToolResult = outcome.status === 'fulfilled'
+      ? outcome.value
+      : { content: outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason), isError: true }
+
+    const { content, isError, details } = result
+    const toolResultEntry: AgentEntry = {
+      type:    'tool_result',
+      payload: { toolCallId: tc.toolCallId, toolName: tc.toolName, content, isError },
+    }
+    kernel.append(toolResultEntry)
+    stream.push({ type: 'tool_result', toolCallId: tc.toolCallId, content, isError, details })
+    toolResults.push({ toolCallId: tc.toolCallId, toolName: tc.toolName, content, isError, details })
+  }
+
+  return { steeringMessages: steeringArrived ? steeringMessages : undefined, toolResults }
+}
+
+async function runSingleTool(
+  tc:          ToolCallInfo,
+  tools:       AgentTool[],
+  stream:      EventStream<AgentEvent, AgentResult>,
+  signal:      AbortSignal | undefined,
+  toolTimeout: number | undefined,
+): Promise<ToolResult> {
+  const tool = tools.find((t) => t.name === tc.toolName)
+
+  try {
+    if (!tool) throw new Error(`Tool not found: ${tc.toolName}`)
+
+    const validated = validateInput(tool, tc.input)
+    if (!validated.ok) {
+      return { content: validated.content, isError: true }
+    }
+
+    const execPromise = tool.execute(
+      tc.toolCallId,
+      validated.value,
+      signal,
+      (partial) => stream.push({ type: 'tool_update', toolCallId: tc.toolCallId, partial }),
+    )
+
+    return await (toolTimeout ? withTimeout(execPromise, toolTimeout, signal) : execPromise)
+  } catch (err) {
+    return { content: err instanceof Error ? err.message : String(err), isError: true }
+  }
+}
+
+// ─── withTimeout ──────────────────────────────────────────────────────────────
+
+function withTimeout<T>(promise: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Tool timed out after ${ms}ms`)), ms)
+    const clear = () => clearTimeout(timer)
+    signal?.addEventListener('abort', clear)
+    promise.then(v => { clear(); resolve(v) }, e => { clear(); reject(e) })
+  })
+}
+
+// ─── withRetry ────────────────────────────────────────────────────────────────
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  opts: { maxAttempts: number; delayMs: number },
+  signal?: AbortSignal,
+): Promise<T> {
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= opts.maxAttempts; attempt++) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+    try { return await fn() } catch (err) {
+      if (signal?.aborted) throw err
+      if (attempt === opts.maxAttempts) throw err
+      lastErr = err
+      await new Promise(r => setTimeout(r, opts.delayMs))
+    }
+  }
+  throw lastErr
 }
 
 // ─── accumulateUsage ──────────────────────────────────────────────────────────

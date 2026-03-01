@@ -159,10 +159,19 @@ export interface AgentKernel {
   readLog(): AgentEntry[]
 }
 
+// ─── Session metadata ─────────────────────────────────────────────────────────
+
+export type SessionMeta = {
+  createdAt: number   // set once at creation, never overwritten
+  title?:    string
+}
+
 // ─── Kernel options ──────────────────────────────────────────────────────────
 
 export interface KernelOptions {
   /** Session directory and ID for persistence. Omit for in-memory mode. */
   dir:       string
   sessionId: string
+  /** Optional metadata to set/merge on the session. `createdAt` is auto-set and cannot be overwritten. */
+  meta?:     Partial<Omit<SessionMeta, 'createdAt'>>
 }

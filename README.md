@@ -32,6 +32,11 @@ src/
 - Persistent sessions via `createAgent({ session: { dir, sessionId } })`
 - Conversation compaction via `kernel.compact(fromId, toId, summaryText)`
 - Strong TypeScript types — `execute` input is inferred from the TypeBox schema
+- **Parallel tool execution** — run all tool calls in a single turn concurrently
+- **Tool timeout** — per-call deadline; timed-out tools return an error result automatically
+- **Auto-compaction hook** — `onContextFull` fires when the context window is full
+- **Stream error retry** — automatic retry with fixed delay for transient LLM errors
+- **Session metadata** — attach a `title` (or any custom field) to a session; read it back from `listSessions`
 
 ## Install
 
@@ -353,6 +358,68 @@ await agent.waitForIdle()
 
 ---
 
+## Advanced Agent Options
+
+### Parallel Tool Execution
+
+By default tools run sequentially. Set `parallelTools: true` to run all tool calls in a turn concurrently with `Promise.allSettled`. If a steering message arrives after all tools complete, their results are discarded and replaced with skipped markers.
+
+```ts
+const agent = createAgent({
+  stream, tools, maxSteps: 10,
+  parallelTools: true,
+})
+```
+
+### Tool Timeout
+
+Set a per-tool execution deadline in milliseconds. Tools that exceed it return an `isError: true` result so the LLM can handle the failure gracefully.
+
+```ts
+const agent = createAgent({
+  stream, tools, maxSteps: 10,
+  toolTimeout: 15_000, // 15 s per tool call
+})
+```
+
+### Auto-Compaction Hook (`onContextFull`)
+
+Fires after a step when `kernel.contextSize >= kernel.budget.limit`. The callback is responsible for compacting the kernel; the loop just provides the hook.
+
+```ts
+const agent = createAgent({
+  stream, tools, maxSteps: 10,
+  onContextFull: async (kernel) => {
+    const entries = kernel.read()
+    const from = entries[0].id
+    const to   = entries[Math.floor(entries.length / 2)].id
+    kernel.compact(from, to, 'Earlier context summarised.')
+  },
+})
+
+agent.kernel.budget.set(80_000) // tokens — trigger at 80 k input tokens
+```
+
+Only fires when `budget.limit` is explicitly set (the default is `Infinity`).
+
+### Stream Error Retry
+
+Automatically retry transient LLM errors with a fixed delay. Abort signals are respected — no retry happens after abort.
+
+```ts
+const agent = createAgent({
+  stream, tools, maxSteps: 10,
+  retryOnError: {
+    maxAttempts: 3,  // total attempts including the first
+    delayMs:     500,
+  },
+})
+```
+
+Only `stream()` calls are retried; tool execution is not affected.
+
+---
+
 ## Persistent Session + Kernel Compaction
 
 ```ts
@@ -386,34 +453,64 @@ Session files are written under `./.agent-sessions/<sessionId>/` (`kernel.jsonl`
 
 ## Session Management
 
-`listSessions` and `deleteSession` are standalone utilities for CLI and Web API use cases.
+`listSessions`, `deleteSession`, and `updateSessionMeta` are standalone utilities for CLI and Web API use cases.
 
 ```ts
-import { listSessions, deleteSession } from '@devxiyang/agent-kernel/kernel'
+import {
+  listSessions,
+  deleteSession,
+  updateSessionMeta,
+} from '@devxiyang/agent-kernel/kernel'
 
 // List all sessions, sorted by most recently updated
 const sessions = listSessions('./.agent-sessions')
 // [
-//   { sessionId: 'demo-001', updatedAt: 1740000000000, messageCount: 12 },
-//   { sessionId: 'demo-002', updatedAt: 1739000000000, messageCount: 4 },
+//   { sessionId: 'demo-001', updatedAt: 1740000000000, messageCount: 12,
+//     meta: { createdAt: 1739999000000, title: 'My first session' } },
+//   { sessionId: 'demo-002', updatedAt: 1739000000000, messageCount: 4,
+//     meta: { createdAt: 1738999000000 } },
 // ]
 
 // Delete a session
 deleteSession('./.agent-sessions', 'demo-001')
+
+// Update a session's metadata (merge — never overwrites createdAt)
+updateSessionMeta('./.agent-sessions', 'demo-002', { title: 'Renamed session' })
 ```
 
-`SessionInfo` type:
+### Session Metadata
+
+Pass `meta` when creating a session to set an initial title or other fields. `createdAt` is set automatically on first creation and is never overwritten.
 
 ```ts
+const agent = createAgent({
+  stream, tools, maxSteps: 8,
+  session: {
+    dir:       './.agent-sessions',
+    sessionId: 'my-session',
+    meta:      { title: 'Code review assistant' },
+  },
+})
+```
+
+`SessionMeta` and `SessionInfo` types:
+
+```ts
+type SessionMeta = {
+  createdAt: number   // Unix ms — set once at creation
+  title?:    string
+}
+
 type SessionInfo = {
-  sessionId:    string  // directory name used as session ID
-  updatedAt:    number  // log.jsonl mtime in milliseconds
-  messageCount: number  // number of entries in log.jsonl
+  sessionId:    string        // directory name used as session ID
+  updatedAt:    number        // log.jsonl mtime in milliseconds
+  messageCount: number        // number of entries in log.jsonl
+  meta:         SessionMeta | null
 }
 ```
 
-Both functions are safe to call on non-existent paths — `listSessions` returns `[]` and
-`deleteSession` is a silent no-op when the session or directory does not exist.
+All functions are safe to call on non-existent paths — `listSessions` returns `[]`,
+`deleteSession` and `updateSessionMeta` are silent no-ops when the session does not exist.
 
 ---
 
