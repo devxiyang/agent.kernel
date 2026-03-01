@@ -1,60 +1,44 @@
 # agent-kernel
 
-`agent-kernel` is a TypeScript library that provides a provider-agnostic agent runtime:
-- a persistent/in-memory conversation kernel
-- an event-driven agent loop with tool execution and parameter validation
-- a reusable async event stream primitive
+[![npm version](https://img.shields.io/npm/v/@devxiyang/agent-kernel)](https://www.npmjs.com/package/@devxiyang/agent-kernel)
+[![npm downloads](https://img.shields.io/npm/dm/@devxiyang/agent-kernel)](https://www.npmjs.com/package/@devxiyang/agent-kernel)
+[![license](https://img.shields.io/npm/l/@devxiyang/agent-kernel)](./LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
 
-## Core Concepts
+A provider-agnostic agent runtime for TypeScript. Bring your own LLM — `agent-kernel` handles the loop, tool execution, event streaming, and conversation persistence.
 
-- `Agent`: stateful runtime that orchestrates model calls, tool execution, and event emission.
-- `Kernel`: conversation state store (in-memory or persisted), with branching and compaction support.
-- `StreamFn`: provider adapter contract — you implement it once for any LLM backend.
-- `AgentTool`: executable unit with a TypeBox schema for parameter validation and provider schema generation.
+## Features
 
-## Project Structure
-
-```text
-src/
-  core/
-    agent/
-    kernel/
-  event-stream.ts
-  index.ts
-```
-
-## Feature Map
-
-- Provider-agnostic runtime via `StreamFn`
-- Real-time events (`text_delta`, `tool_call`, `tool_result`, `step_done`, etc.)
-- Tool execution loop with automatic parameter validation (TypeBox + `Value.Parse`)
-- Validation errors returned as `tool_result` so the LLM can self-correct
-- Persistent sessions via `createAgent({ session: { dir, sessionId } })`
-- Conversation compaction via `kernel.compact(fromId, toId, summaryText)`
-- Strong TypeScript types — `execute` input is inferred from the TypeBox schema
-- **Parallel tool execution** — run all tool calls in a single turn concurrently
-- **Tool timeout** — per-call deadline; timed-out tools return an error result automatically
-- **Auto-compaction hook** — `onContextFull` fires when the context window is full
-- **Stream error retry** — automatic retry with fixed delay for transient LLM errors
-- **Session metadata** — attach a `title` (or any custom field) to a session; read it back from `listSessions`
+- **Provider-agnostic** — implement one `StreamFn` adapter for any LLM backend (OpenAI, Anthropic, Vercel AI SDK, etc.)
+- **Real-time event stream** — `text_delta`, `tool_call`, `tool_result`, `step_done`, and more
+- **Typed tool execution** — TypeBox schemas drive runtime validation, coercion, and LLM schema generation
+- **Parallel tool execution** — run all tool calls in a turn concurrently
+- **Tool timeout** — per-call deadline; timed-out tools return an error result the LLM can handle
+- **Persistent sessions** — optional file-backed conversation history, survives restarts
+- **Conversation compaction** — replace old entries with a summary to stay within context limits
+- **Auto-compaction hook** — `onContextFull` fires when the token budget is reached
+- **Steering & follow-up** — inject messages mid-run without re-prompting
+- **Stream error retry** — automatic retry with configurable delay for transient LLM errors
+- **Session metadata** — attach titles and custom fields to sessions; query with `listSessions`
 
 ## Install
 
 ```bash
 npm install @devxiyang/agent-kernel
-npm install @sinclair/typebox
-npm install openai             # if using OpenAI SDK adapter
-npm install ai @ai-sdk/openai  # if using Vercel AI SDK adapter
 ```
 
-## Module Index
+`@sinclair/typebox` is a required peer dependency for tool parameter schemas:
 
-- `@devxiyang/agent-kernel` — root export (agent APIs + `EventStream`)
-- `@devxiyang/agent-kernel/agent` — direct agent module
-- `@devxiyang/agent-kernel/kernel` — kernel module (`createKernel`, kernel types)
-- `@devxiyang/agent-kernel/event-stream` — `EventStream`
+```bash
+npm install @sinclair/typebox
+```
 
----
+Optional — install the LLM SDK of your choice:
+
+```bash
+npm install openai             # OpenAI SDK
+npm install ai @ai-sdk/openai  # Vercel AI SDK
+```
 
 ## Quick Start
 
@@ -62,7 +46,7 @@ npm install ai @ai-sdk/openai  # if using Vercel AI SDK adapter
 import { Type } from '@sinclair/typebox'
 import { createAgent, type StreamFn, type AgentTool } from '@devxiyang/agent-kernel'
 
-// Minimal echo stream (replace with a real provider adapter)
+// Implement StreamFn once for your LLM provider (see adapter examples below)
 const stream: StreamFn = async (messages, _tools, onEvent) => {
   const last = messages.filter((m) => m.role === 'user').at(-1)
   const reply = `Echo: ${typeof last?.content === 'string' ? last.content : '[multi-part]'}`
@@ -74,13 +58,11 @@ const stream: StreamFn = async (messages, _tools, onEvent) => {
   }
 }
 
-const getTimeSchema = Type.Object({})
-
 const tools: AgentTool[] = [
   {
     name:        'get_time',
     description: 'Returns the current UTC time as an ISO string.',
-    parameters:  getTimeSchema,
+    parameters:  Type.Object({}),
     execute: async () => ({ content: new Date().toISOString(), isError: false }),
   },
 ]
@@ -95,13 +77,30 @@ agent.prompt({ type: 'user', payload: { parts: [{ type: 'text', text: 'What time
 await agent.waitForIdle()
 ```
 
+## Module Index
+
+| Import path | Contents |
+|---|---|
+| `@devxiyang/agent-kernel` | `Agent`, `createAgent`, `runLoop`, `wrapTool`, `EventStream`, all types |
+| `@devxiyang/agent-kernel/agent` | Agent module only |
+| `@devxiyang/agent-kernel/kernel` | `createKernel`, `listSessions`, `deleteSession`, `updateSessionMeta`, kernel types |
+| `@devxiyang/agent-kernel/event-stream` | `EventStream` |
+
+## Core Concepts
+
+| Concept | Description |
+|---|---|
+| `Agent` | Stateful runtime — orchestrates the model loop, tool execution, and event emission |
+| `Kernel` | Conversation store (in-memory or file-backed) with branching and compaction |
+| `StreamFn` | Provider adapter — one function that calls your LLM and emits stream events |
+| `AgentTool` | Executable unit with a TypeBox schema for validation and provider schema generation |
+| `EventStream` | Async-iterable push stream primitive used internally by the loop |
+
 ---
 
 ## Defining Tools
 
-Tools carry their TypeBox schema in `parameters`. The loop validates and coerces LLM-supplied
-arguments before calling `execute`; validation errors are returned as `tool_result` so the LLM
-can retry with corrected parameters.
+TypeBox schemas in `parameters` drive both runtime validation and the JSON Schema passed to the LLM. The `execute` input type is inferred — no manual annotation needed.
 
 ```ts
 import { Type } from '@sinclair/typebox'
@@ -112,7 +111,6 @@ const searchSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: 'Max results (default 10)' })),
 })
 
-// typeof searchSchema drives the input type — no manual annotation needed
 const searchTool: AgentTool<typeof searchSchema> = {
   name:        'search_docs',
   description: 'Search project documentation by query.',
@@ -128,15 +126,11 @@ const searchTool: AgentTool<typeof searchSchema> = {
 }
 ```
 
-`parameters` is a standard JSON Schema at runtime (TypeBox schemas are JSON Schema), so
-provider adapters can pass `tool.parameters` directly to any LLM API.
+Validation errors are returned as `isError: true` tool results so the LLM can self-correct.
 
 ---
 
 ## Implementing a `StreamFn`
-
-`StreamFn` receives the current conversation messages and the full tool list on every call.
-Use `tools` to generate the provider-specific schema — no hardcoding needed.
 
 ```ts
 type StreamFn = (
@@ -147,30 +141,27 @@ type StreamFn = (
 ) => Promise<LLMStepResult>
 ```
 
+The function receives the full conversation and tool list on every call. Use `tool.parameters` (plain JSON Schema) to generate provider-specific tool definitions.
+
 ---
 
-## Example: OpenAI SDK Adapter
+## Adapter Examples
 
-Uses the OpenAI Responses API. Tools are converted from TypeBox schemas on every call.
+### OpenAI SDK
 
 ```ts
 import OpenAI from 'openai'
-import type { AgentMessage, StreamFn, ToolCallInfo } from '@devxiyang/agent-kernel'
+import type { StreamFn, ToolCallInfo } from '@devxiyang/agent-kernel'
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-
-function toOpenAIMessages(messages: AgentMessage[]) {
-  return messages.map((m) => ({
-    role:    m.role as 'user' | 'assistant' | 'tool',
-    content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-  }))
-}
 
 export const openaiStream: StreamFn = async (messages, tools, onEvent, signal) => {
   const response = await client.responses.create({
     model: 'gpt-4o',
-    input: toOpenAIMessages(messages),
-    // TypeBox schemas are plain JSON Schema — pass them directly
+    input: messages.map((m) => ({
+      role:    m.role as 'user' | 'assistant' | 'tool',
+      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+    })),
     tools: tools.map((t) => ({
       type:        'function' as const,
       name:        t.name,
@@ -218,70 +209,21 @@ export const openaiStream: StreamFn = async (messages, tools, onEvent, signal) =
     },
   }
 }
-
-// Usage
-import { Type } from '@sinclair/typebox'
-import { createAgent } from '@devxiyang/agent-kernel'
-
-const searchSchema = Type.Object({
-  query: Type.String({ description: 'Search query string' }),
-})
-
-const agent = createAgent({
-  stream: openaiStream,
-  tools: [
-    {
-      name:        'search_docs',
-      description: 'Search project documentation by query.',
-      parameters:  searchSchema,
-      execute: async (_id, input) => ({
-        content:  `Results for: ${input.query}`,
-        isError:  false,
-      }),
-    },
-  ],
-  maxSteps: 10,
-})
-
-agent.subscribe((e) => { if (e.type === 'text_delta') process.stdout.write(e.delta) })
-agent.prompt({ type: 'user', payload: { parts: [{ type: 'text', text: 'Find compact API docs' }] } })
-await agent.waitForIdle()
 ```
 
----
-
-## Example: Vercel AI SDK v6 Adapter
-
-Uses `streamText` from `ai`. Tools without an `execute` function are returned as tool calls
-for our loop to handle. `jsonSchema()` wraps TypeBox schemas as AI SDK-compatible schemas.
+### Vercel AI SDK
 
 ```ts
 import { streamText, jsonSchema, tool } from 'ai'
 import { openai } from '@ai-sdk/openai'
-import type { AgentMessage, StreamFn, ToolCallInfo } from '@devxiyang/agent-kernel'
-
-function toAISDKMessages(messages: AgentMessage[]) {
-  return messages.map((m) => {
-    if (m.role === 'tool') {
-      // tool_result entries — AI SDK expects role 'tool'
-      const payload = m.content as { toolCallId: string; content: string }
-      return { role: 'tool' as const, content: [{ type: 'tool-result' as const, toolCallId: payload.toolCallId, result: payload.content }] }
-    }
-    return {
-      role:    m.role as 'user' | 'assistant',
-      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-    }
-  })
-}
+import type { StreamFn, ToolCallInfo } from '@devxiyang/agent-kernel'
 
 export const aiSdkStream: StreamFn = async (messages, tools, onEvent, signal) => {
-  // Build AI SDK tool definitions — no execute, our loop handles execution
   const aiTools = Object.fromEntries(
     tools.map((t) => [
       t.name,
       tool({
         description: t.description,
-        // jsonSchema() accepts any plain JSON Schema — TypeBox schemas qualify
         inputSchema: t.parameters ? jsonSchema(t.parameters) : jsonSchema({ type: 'object', properties: {} }),
       }),
     ]),
@@ -289,9 +231,12 @@ export const aiSdkStream: StreamFn = async (messages, tools, onEvent, signal) =>
 
   const result = streamText({
     model:       openai('gpt-4o'),
-    messages:    toAISDKMessages(messages),
+    messages:    messages.map((m) => ({
+      role:    m.role as 'user' | 'assistant',
+      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+    })),
     tools:       aiTools,
-    maxSteps:    1,          // one LLM call per StreamFn invocation; our kernel loops
+    maxSteps:    1,
     abortSignal: signal,
   })
 
@@ -326,163 +271,74 @@ export const aiSdkStream: StreamFn = async (messages, tools, onEvent, signal) =>
     },
   }
 }
-
-// Usage
-import { Type } from '@sinclair/typebox'
-import { createAgent } from '@devxiyang/agent-kernel'
-
-const searchSchema = Type.Object({
-  query: Type.String({ description: 'Search query string' }),
-})
-
-const agent = createAgent({
-  stream: aiSdkStream,
-  tools: [
-    {
-      name:        'search_docs',
-      description: 'Search project documentation by query.',
-      parameters:  searchSchema,
-      execute: async (_id, input) => ({
-        content:  `Results for: ${input.query}`,
-        isError:  false,
-      }),
-    },
-  ],
-  maxSteps: 10,
-})
-
-agent.subscribe((e) => { if (e.type === 'text_delta') process.stdout.write(e.delta) })
-agent.prompt({ type: 'user', payload: { parts: [{ type: 'text', text: 'Find compact API docs' }] } })
-await agent.waitForIdle()
 ```
 
 ---
 
-## Advanced Agent Options
+## Advanced Options
 
 ### Parallel Tool Execution
 
-By default tools run sequentially. Set `parallelTools: true` to run all tool calls in a turn concurrently with `Promise.allSettled`. If a steering message arrives after all tools complete, their results are discarded and replaced with skipped markers.
+Run all tool calls in a turn concurrently. If a steering message arrives after execution, results are discarded and replaced with skipped markers.
 
 ```ts
-const agent = createAgent({
-  stream, tools, maxSteps: 10,
-  parallelTools: true,
-})
+const agent = createAgent({ stream, tools, maxSteps: 10, parallelTools: true })
 ```
 
 ### Tool Timeout
 
-Set a per-tool execution deadline in milliseconds. Tools that exceed it return an `isError: true` result so the LLM can handle the failure gracefully.
+Per-call deadline in milliseconds. Timed-out tools return `isError: true` so the LLM can handle the failure.
+
+```ts
+const agent = createAgent({ stream, tools, maxSteps: 10, toolTimeout: 15_000 })
+```
+
+### Stream Error Retry
+
+Retry transient LLM errors with a fixed delay. Abort signals are respected — no retry after abort.
 
 ```ts
 const agent = createAgent({
   stream, tools, maxSteps: 10,
-  toolTimeout: 15_000, // 15 s per tool call
+  retryOnError: { maxAttempts: 3, delayMs: 500 },
 })
 ```
 
-### Auto-Compaction Hook (`onContextFull`)
+### Auto-Compaction (`onContextFull`)
 
-Fires after a step when `kernel.contextSize >= kernel.budget.limit`. The callback is responsible for compacting the kernel; the loop just provides the hook.
+Fires after a step when `kernel.contextSize >= kernel.budget.limit`. Set `kernel.budget` to activate.
 
 ```ts
 const agent = createAgent({
   stream, tools, maxSteps: 10,
   onContextFull: async (kernel) => {
     const entries = kernel.read()
-    const from = entries[0].id
-    const to   = entries[Math.floor(entries.length / 2)].id
-    kernel.compact(from, to, 'Earlier context summarised.')
+    kernel.compact(entries[0].id, entries[Math.floor(entries.length / 2)].id, 'Earlier context summarised.')
   },
 })
 
-agent.kernel.budget.set(80_000) // tokens — trigger at 80 k input tokens
+agent.kernel.budget.set(80_000) // trigger at 80 k input tokens
 ```
 
-Only fires when `budget.limit` is explicitly set (the default is `Infinity`).
+### Steering & Follow-up
 
-### Stream Error Retry
-
-Automatically retry transient LLM errors with a fixed delay. Abort signals are respected — no retry happens after abort.
+Inject messages into a running or idle agent without re-prompting.
 
 ```ts
-const agent = createAgent({
-  stream, tools, maxSteps: 10,
-  retryOnError: {
-    maxAttempts: 3,  // total attempts including the first
-    delayMs:     500,
-  },
-})
-```
+// Picked up on the next loop iteration
+agent.steer({ type: 'user', payload: { parts: [{ type: 'text', text: 'Focus on security.' }] } })
 
-Only `stream()` calls are retried; tool execution is not affected.
+// Triggers another run after the current one ends
+agent.followUp({ type: 'user', payload: { parts: [{ type: 'text', text: 'Now summarise.' }] } })
+```
 
 ---
 
-## Persistent Session + Kernel Compaction
+## Persistent Sessions
 
 ```ts
 import { createAgent } from '@devxiyang/agent-kernel'
 
-const agent = createAgent({
-  stream:   openaiStream,   // or aiSdkStream
-  tools:    [],
-  maxSteps: 8,
-  session: {
-    dir:       './.agent-sessions',
-    sessionId: 'demo-session-001',
-  },
-})
-
-agent.prompt({ type: 'user', payload: { parts: [{ type: 'text', text: 'Summarize our last discussion.' }] } })
-await agent.waitForIdle()
-
-// Compact old entries when context grows
-const entries = agent.kernel.read()
-if (entries.length > 12) {
-  const fromId = entries[0].id
-  const toId   = entries[Math.min(8, entries.length - 1)].id
-  agent.kernel.compact(fromId, toId, 'Summary of earlier context and decisions.')
-}
-```
-
-Session files are written under `./.agent-sessions/<sessionId>/` (`kernel.jsonl`, `log.jsonl`).
-
----
-
-## Session Management
-
-`listSessions`, `deleteSession`, and `updateSessionMeta` are standalone utilities for CLI and Web API use cases.
-
-```ts
-import {
-  listSessions,
-  deleteSession,
-  updateSessionMeta,
-} from '@devxiyang/agent-kernel/kernel'
-
-// List all sessions, sorted by most recently updated
-const sessions = listSessions('./.agent-sessions')
-// [
-//   { sessionId: 'demo-001', updatedAt: 1740000000000, messageCount: 12,
-//     meta: { createdAt: 1739999000000, title: 'My first session' } },
-//   { sessionId: 'demo-002', updatedAt: 1739000000000, messageCount: 4,
-//     meta: { createdAt: 1738999000000 } },
-// ]
-
-// Delete a session
-deleteSession('./.agent-sessions', 'demo-001')
-
-// Update a session's metadata (merge — never overwrites createdAt)
-updateSessionMeta('./.agent-sessions', 'demo-002', { title: 'Renamed session' })
-```
-
-### Session Metadata
-
-Pass `meta` when creating a session to set an initial title or other fields. `createdAt` is set automatically on first creation and is never overwritten.
-
-```ts
 const agent = createAgent({
   stream, tools, maxSteps: 8,
   session: {
@@ -491,35 +347,88 @@ const agent = createAgent({
     meta:      { title: 'Code review assistant' },
   },
 })
+
+agent.prompt({ type: 'user', payload: { parts: [{ type: 'text', text: 'Summarize our last discussion.' }] } })
+await agent.waitForIdle()
+
+// Manual compaction when context grows
+const entries = agent.kernel.read()
+if (entries.length > 12) {
+  agent.kernel.compact(entries[0].id, entries[8].id, 'Summary of earlier context.')
+}
 ```
 
-`SessionMeta` and `SessionInfo` types:
+Session files are written to `./.agent-sessions/<sessionId>/` (`kernel.jsonl`, `log.jsonl`, `meta.json`).
+
+## Session Management
+
+```ts
+import { listSessions, deleteSession, updateSessionMeta } from '@devxiyang/agent-kernel/kernel'
+
+// List all sessions, sorted by most recently updated
+const sessions = listSessions('./.agent-sessions')
+// [
+//   { sessionId: 'my-session', updatedAt: 1740000000000, messageCount: 12,
+//     meta: { createdAt: 1739999000000, title: 'Code review assistant' } },
+// ]
+
+// Rename a session
+updateSessionMeta('./.agent-sessions', 'my-session', { title: 'New title' })
+
+// Delete a session
+deleteSession('./.agent-sessions', 'my-session')
+```
+
+All functions are safe to call on non-existent paths — `listSessions` returns `[]`, the others are silent no-ops.
+
+### `SessionInfo` type
 
 ```ts
 type SessionMeta = {
-  createdAt: number   // Unix ms — set once at creation
+  createdAt: number   // Unix ms — set once, never overwritten
   title?:    string
 }
 
 type SessionInfo = {
-  sessionId:    string        // directory name used as session ID
+  sessionId:    string
   updatedAt:    number        // log.jsonl mtime in milliseconds
-  messageCount: number        // number of entries in log.jsonl
+  messageCount: number        // entries in log.jsonl
   meta:         SessionMeta | null
 }
 ```
 
-All functions are safe to call on non-existent paths — `listSessions` returns `[]`,
-`deleteSession` and `updateSessionMeta` are silent no-ops when the session does not exist.
+---
+
+## Tool Hooks (`wrapTool`)
+
+Intercept tool calls before or after execution without modifying the original tool.
+
+```ts
+import { wrapTool } from '@devxiyang/agent-kernel'
+
+const guardedTool = wrapTool(myTool, {
+  before: async (toolCallId, toolName, input) => {
+    if (!isAllowed(input)) return { action: 'block', reason: 'Not permitted.' }
+  },
+  after: async (toolCallId, toolName, result) => {
+    return { content: redact(result.content) }
+  },
+})
+```
+
+`before` can return `{ action: 'block', reason }` to skip execution; the reason is returned as `isError: true`. `after` can override `content`, `isError`, or `details`.
 
 ---
 
-## Build Output
-
-Compiled files and type declarations are generated into `dist/`.
+## Build & Test
 
 ```bash
-npm run build      # compile TypeScript to dist/
+npm run build      # compile TypeScript → dist/
 npm run typecheck  # type-check without emitting
 npm test           # run unit tests (vitest)
+npm run test:watch # watch mode
 ```
+
+## License
+
+[MIT](./LICENSE)

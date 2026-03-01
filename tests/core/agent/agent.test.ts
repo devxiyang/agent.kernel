@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { Agent, createAgent } from './agent.js'
-import { createKernel } from '../kernel/kernel.js'
+import { Agent, createAgent } from '../../../src/core/agent/agent.js'
+import { createKernel } from '../../../src/core/kernel/kernel.js'
 import type {
   AgentEntry,
   AgentEvent,
   AgentOptions,
   LLMStepResult,
   LLMStreamEvent,
-} from './types.js'
+} from '../../../src/core/agent/types.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
