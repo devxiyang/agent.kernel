@@ -19,24 +19,28 @@ export class EventStream<T, R> {
     })
   }
 
+  /** Emit one event to the next waiting consumer, or buffer it if none is waiting. */
   push(event: T): void {
     const waiter = this.waiters.shift()
     if (waiter) { waiter(event); return }
     this.queue.push(event)
   }
 
+  /** Signal successful completion. Resolves the result promise and unblocks all consumers. */
   end(result: R): void {
     this.done = true
     this.resolveResult(result)
     this.waiters.splice(0).forEach((w) => w(null))
   }
 
+  /** Signal an error. Rejects the result promise and unblocks all consumers. */
   error(err: Error): void {
     this.done = true
     this.rejectResult(err)
     this.waiters.splice(0).forEach((w) => w(null))
   }
 
+  /** Await the final result value (resolves after end(), rejects after error()). */
   result(): Promise<R> { return this.resultP }
 
   async *[Symbol.asyncIterator](): AsyncGenerator<T> {

@@ -43,6 +43,13 @@ export interface AgentState {
 
 // ─── Agent ───────────────────────────────────────────────────────────────────
 
+/**
+ * High-level stateful agent.
+ *
+ * Owns the AbortController lifecycle, steering/follow-up queues, event fan-out
+ * to subscribers, and mutable config. The underlying kernel (conversation store)
+ * is created externally and injected — the Agent never touches persistence directly.
+ */
 export class Agent {
   private readonly _kernel: AgentKernel
 
@@ -90,8 +97,10 @@ export class Agent {
 
   // ── State ──────────────────────────────────────────────────────────────
 
+  /** The underlying kernel that owns conversation history and persistence. */
   get kernel(): AgentKernel { return this._kernel }
 
+  /** Snapshot of the current runtime state (read-only). */
   get state(): AgentState {
     return {
       isRunning:        this._abortController !== null,
@@ -103,14 +112,23 @@ export class Agent {
 
   // ── Mutators ─────────────────────────────────────────────────────────────
 
+  /** Replace the LLM streaming function (takes effect on the next run). */
   setStream(stream: StreamFn): void      { this._stream = stream }
+  /** Replace the tool set (takes effect on the next run). */
   setTools(tools: AgentTool[]): void     { this._tools = tools }
+  /** Update the maximum number of loop steps (takes effect on the next run). */
   setMaxSteps(maxSteps: number): void    { this._maxSteps = maxSteps }
+  /** Change how many steering messages are dequeued per check. */
   setSteeringMode(mode: QueueMode): void { this._steeringMode = mode }
+  /** Change how many follow-up messages are dequeued per check. */
   setFollowUpMode(mode: QueueMode): void { this._followUpMode = mode }
 
   // ── Event subscription ──────────────────────────────────────────────────
 
+  /**
+   * Register a listener for all agent events.
+   * Returns an unsubscribe function — call it to stop receiving events.
+   */
   subscribe(fn: (event: AgentEvent) => void): () => void {
     this._listeners.add(fn)
     return () => { this._listeners.delete(fn) }
@@ -118,6 +136,10 @@ export class Agent {
 
   // ── Prompt ──────────────────────────────────────────────────────────────
 
+  /**
+   * Append one or more user entries to the kernel and start a new agent run.
+   * Throws if the agent is already running — use steer() or followUp() instead.
+   */
   prompt(entries: AgentEntry | AgentEntry[]): void {
     if (this.state.isRunning) {
       throw new Error('Agent is already running. Use steer() or followUp() to queue messages.')
@@ -131,6 +153,11 @@ export class Agent {
     this._run()
   }
 
+  /**
+   * Resume execution after an error, abort, or when steering/follow-up messages
+   * are queued but the loop has already exited.
+   * Throws if already running or if there is nothing to continue from.
+   */
   continue(): void {
     if (this.state.isRunning) {
       throw new Error('Agent is already running.')
@@ -157,22 +184,38 @@ export class Agent {
 
   // ── Steering / Follow-up ────────────────────────────────────────────────
 
+  /**
+   * Queue a steering message that interrupts the current run between tool calls.
+   * Safe to call while the agent is running. The loop picks it up on the next
+   * steering check and skips any remaining tool calls in the current batch.
+   */
   steer(entries: AgentEntry | AgentEntry[]): void {
     this._steeringQueue.push(...(Array.isArray(entries) ? entries : [entries]))
   }
 
+  /**
+   * Queue a follow-up message to be processed after the current run completes.
+   * Causes the outer loop to continue rather than stop when the agent would
+   * otherwise go idle.
+   */
   followUp(entries: AgentEntry | AgentEntry[]): void {
     this._followUpQueue.push(...(Array.isArray(entries) ? entries : [entries]))
   }
 
   // ── Abort ───────────────────────────────────────────────────────────────
 
+  /** Cancel the current run. No-op if not running. */
   abort(): void {
     this._abortController?.abort()
   }
 
   // ── Reset ────────────────────────────────────────────────────────────────
 
+  /**
+   * Clear all queues and transient runtime state (stream entry, pending tool calls, error).
+   * Does NOT touch the kernel or conversation history.
+   * Throws if called while running — abort() first.
+   */
   reset(): void {
     if (this.state.isRunning) {
       throw new Error('Cannot reset while running. Call abort() first.')
@@ -190,6 +233,7 @@ export class Agent {
 
   // ── Wait ────────────────────────────────────────────────────────────────
 
+  /** Resolves when the agent finishes its current run (or immediately if idle). */
   async waitForIdle(): Promise<void> {
     if (this._runningPromise) {
       try { await this._runningPromise } catch { /* caller handles errors via subscribe */ }
@@ -322,6 +366,10 @@ export interface AgentSessionOptions extends AgentOptions {
   session?: { dir: string; sessionId: string; meta?: KernelOptions['meta'] }
 }
 
+/**
+ * Convenience factory that creates a kernel (optionally with persistence) and
+ * wraps it in an Agent. Prefer this over constructing Agent directly.
+ */
 export function createAgent(options: AgentSessionOptions): Agent {
   const { session, ...agentOptions } = options
   const kernel = createKernel(session)

@@ -1,3 +1,10 @@
+/**
+ * @module agent-kernel/agent
+ *
+ * Public surface of the Agent module. Exports all types, the Agent class,
+ * the createAgent factory, the low-level runLoop function, and the wrapTool helper.
+ */
+
 export type {
   Usage,
   AgentEntry,
