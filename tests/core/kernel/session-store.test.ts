@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { listSessions, deleteSession, updateSessionMeta } from './session-store.js'
-import { createKernel } from './kernel.js'
+import { listSessions, deleteSession, updateSessionMeta } from '../../../src/core/kernel/session-store.js'
+import { createKernel } from '../../../src/core/kernel/kernel.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Type } from '@sinclair/typebox'
-import { wrapTool } from './wrap-tool.js'
-import type { AgentTool, ToolResult } from './types.js'
+import { wrapTool } from '../../../src/core/agent/wrap-tool.js'
+import type { AgentTool, ToolResult } from '../../../src/core/agent/types.js'
 
 function makeTool(result: ToolResult = { content: 'ok', isError: false }): AgentTool {
   return {

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Type } from '@sinclair/typebox'
-import { runLoop } from './loop.js'
-import { createKernel } from '../kernel/kernel.js'
+import { runLoop } from '../../../src/core/agent/loop.js'
+import { createKernel } from '../../../src/core/kernel/kernel.js'
 import type {
   AgentConfig,
   AgentEvent,
@@ -9,7 +9,7 @@ import type {
   AgentTool,
   LLMStepResult,
   LLMStreamEvent,
-} from './types.js'
+} from '../../../src/core/agent/types.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

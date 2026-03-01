@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { EventStream } from './event-stream.js'
+import { EventStream } from '../src/event-stream.js'
 
 describe('EventStream', () => {
   it('pushes events that are consumed by async iteration', async () => {

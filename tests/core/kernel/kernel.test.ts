@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { createKernel } from './kernel.js'
-import type { AgentEntry } from './types.js'
+import { createKernel } from '../../../src/core/kernel/kernel.js'
+import type { AgentEntry } from '../../../src/core/kernel/types.js'
 
 // Temp dirs created during file-persistence tests; cleaned up after each test.
 const tmpDirs: string[] = []
