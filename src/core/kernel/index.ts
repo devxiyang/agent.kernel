@@ -35,5 +35,8 @@ export { COMPACTION_TYPE } from './types'
 
 export { createKernel } from './kernel'
 
+export type { KernelCacheOptions } from './kernel-cache'
+export { KernelCache } from './kernel-cache'
+
 export type { SessionInfo } from './session-store'
 export { listSessions, deleteSession, updateSessionMeta } from './session-store'

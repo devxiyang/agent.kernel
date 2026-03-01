@@ -233,10 +233,10 @@ export class Agent {
 
   // ── Wait ────────────────────────────────────────────────────────────────
 
-  /** Resolves when the agent finishes its current run (or immediately if idle). */
+  /** Resolves when the agent is truly idle (no running loop, no queued follow-ups). */
   async waitForIdle(): Promise<void> {
-    if (this._runningPromise) {
-      try { await this._runningPromise } catch { /* caller handles errors via subscribe */ }
+    while (this._runningPromise) {
+      try { await this._runningPromise } catch { /* errors propagate via subscribe */ }
     }
   }
 
@@ -279,6 +279,9 @@ export class Agent {
     } finally {
       this._abortController = null
       this._runningPromise  = null
+      if (this._followUpQueue.length > 0) {
+        this._run()
+      }
     }
   }
 

@@ -20,6 +20,7 @@ A provider-agnostic agent runtime for TypeScript. Bring your own LLM — `agent-
 - **Steering & follow-up** — inject messages mid-run without re-prompting
 - **Stream error retry** — automatic retry with configurable delay for transient LLM errors
 - **Session metadata** — attach titles and custom fields to sessions; query with `listSessions`
+- **Kernel cache** — LRU + TTL in-memory cache for session kernels
 
 ## Install
 
@@ -46,7 +47,7 @@ npm install ai @ai-sdk/openai  # Vercel AI SDK
 import { Type } from '@sinclair/typebox'
 import { createAgent, type StreamFn, type AgentTool } from '@devxiyang/agent-kernel'
 
-// Implement StreamFn once for your LLM provider (see adapter examples below)
+// 1. Implement StreamFn for your LLM provider (see adapter examples below)
 const stream: StreamFn = async (messages, _tools, onEvent) => {
   const last = messages.filter((m) => m.role === 'user').at(-1)
   const reply = `Echo: ${typeof last?.content === 'string' ? last.content : '[multi-part]'}`
@@ -58,6 +59,7 @@ const stream: StreamFn = async (messages, _tools, onEvent) => {
   }
 }
 
+// 2. Define tools
 const tools: AgentTool[] = [
   {
     name:        'get_time',
@@ -67,12 +69,14 @@ const tools: AgentTool[] = [
   },
 ]
 
+// 3. Create agent and subscribe to events
 const agent = createAgent({ stream, tools, maxSteps: 8 })
 
 agent.subscribe((event) => {
   if (event.type === 'text_delta') process.stdout.write(event.delta)
 })
 
+// 4. Send a message and wait for completion
 agent.prompt({ type: 'user', payload: { parts: [{ type: 'text', text: 'What time is it?' }] } })
 await agent.waitForIdle()
 ```
@@ -83,7 +87,7 @@ await agent.waitForIdle()
 |---|---|
 | `@devxiyang/agent-kernel` | `Agent`, `createAgent`, `runLoop`, `wrapTool`, `EventStream`, all types |
 | `@devxiyang/agent-kernel/agent` | Agent module only |
-| `@devxiyang/agent-kernel/kernel` | `createKernel`, `listSessions`, `deleteSession`, `updateSessionMeta`, kernel types |
+| `@devxiyang/agent-kernel/kernel` | `createKernel`, `KernelCache`, `listSessions`, `deleteSession`, `updateSessionMeta`, kernel types |
 | `@devxiyang/agent-kernel/event-stream` | `EventStream` |
 
 ## Core Concepts
@@ -92,9 +96,314 @@ await agent.waitForIdle()
 |---|---|
 | `Agent` | Stateful runtime — orchestrates the model loop, tool execution, and event emission |
 | `Kernel` | Conversation store (in-memory or file-backed) with branching and compaction |
+| `KernelCache` | LRU + TTL cache for reusing kernel instances across requests |
 | `StreamFn` | Provider adapter — one function that calls your LLM and emits stream events |
 | `AgentTool` | Executable unit with a TypeBox schema for validation and provider schema generation |
 | `EventStream` | Async-iterable push stream primitive used internally by the loop |
+
+---
+
+## Agent API
+
+### Sending messages
+
+```ts
+// Start a new run (throws if agent is already running)
+agent.prompt(entry)
+
+// Send a message — the agent decides whether to start a new run or queue it
+// Safe to call whether the agent is idle or running
+agent.followUp(entry)
+```
+
+Use `followUp` when you don't want to manage the agent's running state yourself. It starts a new run when idle and queues the message for the next run otherwise. `prompt` is a lower-level method that gives you explicit control: it throws if the agent is already running, forcing you to decide between `followUp` and `steer`.
+
+### Steering (mid-run interruption)
+
+`steer` injects a message that the loop picks up *between tool calls* in the current run. Unlike `followUp`, it interrupts the current turn rather than waiting for the run to finish.
+
+```ts
+// Safe to call while the agent is running
+agent.steer({ type: 'user', payload: { parts: [{ type: 'text', text: 'Actually, focus only on security.' }] } })
+```
+
+When a steering message arrives, the loop skips any remaining tool calls in the current batch (writing `"Skipped: user interrupted."` results to keep the conversation consistent) and immediately processes the steering message.
+
+**`steer` vs `followUp`**
+
+| | `followUp` | `steer` |
+|---|---|---|
+| When processed | After the current run ends | Between tool calls in the current run |
+| Effect | Continues the outer loop | Interrupts the current tool batch |
+| Use case | Next user turn | Real-time redirection mid-task |
+
+### Waiting for completion
+
+```ts
+await agent.waitForIdle()
+```
+
+Resolves when the agent is truly idle — no running loop and no queued follow-up messages. Useful in request-response contexts (e.g., IPC handlers) where the caller needs to wait for all events to be dispatched before returning.
+
+```ts
+// IPC handler pattern
+async function handleMessage(entry: AgentEntry) {
+  agent.followUp(entry)
+  await agent.waitForIdle()
+  // all events have been dispatched to subscribers
+}
+```
+
+If a subscriber calls `followUp` inside an `agent_end` handler, `waitForIdle` will continue waiting for that follow-up run to finish as well.
+
+### Recovery
+
+```ts
+// Resume after an error or abort, or drain queued follow-up/steering messages
+// Throws if already running or nothing to continue from
+agent.continue()
+```
+
+### Aborting and resetting
+
+```ts
+agent.abort()   // cancel the current run (no-op if idle)
+agent.reset()   // clear all queues and transient state (throws if running)
+```
+
+### Subscribing to events
+
+```ts
+const unsubscribe = agent.subscribe((event) => {
+  switch (event.type) {
+    case 'agent_start':   /* run began */ break
+    case 'turn_start':    /* LLM call starting */ break
+    case 'text_delta':    /* streaming text chunk */ break
+    case 'reasoning_delta': /* streaming reasoning chunk */ break
+    case 'tool_call':     /* tool invocation */ break
+    case 'tool_update':   /* partial tool progress */ break
+    case 'tool_result':   /* tool finished */ break
+    case 'message_end':   /* assistant message committed */ break
+    case 'step_done':     /* step usage stats */ break
+    case 'turn_end':      /* turn finished with tool results */ break
+    case 'agent_end':     /* run finished (check event.error) */ break
+  }
+})
+
+// Stop receiving events
+unsubscribe()
+```
+
+### Inspecting state
+
+```ts
+const { isRunning, streamEntry, pendingToolCalls, error } = agent.state
+
+// Access the underlying kernel
+const entries = agent.kernel.read()
+```
+
+---
+
+## Kernel
+
+The `Kernel` is the conversation store. It holds the full message history as an in-memory linked tree and optionally persists it to `kernel.jsonl`.
+
+### Creating a kernel
+
+```ts
+import { createKernel } from '@devxiyang/agent-kernel/kernel'
+
+// In-memory only (useful for testing)
+const kernel = createKernel()
+
+// File-backed — loads from disk if session exists
+const kernel = createKernel({
+  dir:       './.agent-sessions',
+  sessionId: 'my-session',
+  meta:      { title: 'Code review assistant' },
+})
+```
+
+### Reading conversation history
+
+```ts
+// All entries on the current branch (root → leaf)
+const entries = kernel.read()
+
+// Most recent entry (or null if empty)
+const last = kernel.peek()
+
+// Build provider-agnostic messages for passing to StreamFn
+const messages = kernel.buildMessages()
+```
+
+### Appending entries
+
+```ts
+kernel.append({ type: 'user', payload: { parts: [{ type: 'text', text: 'Hello' }] } })
+```
+
+The `Agent` calls `append` automatically during the loop. Call it directly only when working with a bare kernel outside of an agent.
+
+### Context budget
+
+```ts
+// Set a token limit; onContextFull fires when contextSize >= limit
+kernel.budget.set(80_000)
+
+console.log(kernel.contextSize)  // input tokens from the last assistant entry
+console.log(kernel.budget.limit) // current limit
+console.log(kernel.budget.used)  // same as contextSize
+```
+
+### Compaction
+
+Replace a range of entries with a summary to reduce context size:
+
+```ts
+const entries = kernel.read()
+// Compact the first half of the conversation
+kernel.compact(
+  entries[0].id,
+  entries[Math.floor(entries.length / 2)].id,
+  'Summary: discussed project setup and requirements.',
+)
+```
+
+Compaction rewrites `kernel.jsonl` to the clean current branch and appends a divider to `log.jsonl`.
+
+### Branching
+
+```ts
+// Rewind the conversation to a past entry (discards entries after toId in memory)
+kernel.branch(toId)
+```
+
+### Session files
+
+Each session writes three files to `<dir>/<sessionId>/`:
+
+| File | Contents |
+|---|---|
+| `kernel.jsonl` | Current branch only; rewritten on compaction |
+| `log.jsonl` | Append-only full history; never compacted; used for UI display |
+| `meta.json` | Session metadata (`createdAt`, `title`, custom fields) |
+
+---
+
+## KernelCache
+
+When an agent handles multiple sessions, recreating a `Kernel` from `kernel.jsonl` on every request adds unnecessary I/O. `KernelCache` keeps hot kernels in memory with LRU eviction and TTL expiry.
+
+```ts
+import { KernelCache } from '@devxiyang/agent-kernel/kernel'
+
+const cache = new KernelCache({
+  dir:     './.agent-sessions',
+  maxSize: 100,           // keep at most 100 kernels in memory (default: 50)
+  ttl:     15 * 60_000,   // evict after 15 min of inactivity (default: 30 min)
+})
+```
+
+### Per-request pattern
+
+```ts
+async function handleRequest(sessionId: string, text: string) {
+  // Kernel is reused across requests; Agent is lightweight, created fresh each time
+  const kernel = cache.get(sessionId)
+  const agent  = new Agent(kernel, { stream, tools, maxSteps: 8 })
+
+  agent.subscribe(event => { /* forward events to client */ })
+
+  agent.followUp({ type: 'user', payload: { parts: [{ type: 'text', text }] } })
+  await agent.waitForIdle()
+}
+```
+
+The `Agent` is cheap to construct (no I/O, no async work) so creating one per request is fine. Only the `Kernel` — which holds the in-memory conversation tree — benefits from caching.
+
+### Cache API
+
+```ts
+// Get or create a kernel for sessionId; updates LRU order and resets TTL
+const kernel = cache.get(sessionId)
+
+// Optionally pass metadata written to meta.json on first creation
+const kernel = cache.get(sessionId, { title: 'My session' })
+
+// Remove a specific session from cache (kernel.jsonl is not touched)
+cache.evict(sessionId)
+
+// Remove all cached kernels
+cache.clear()
+
+// Number of kernels currently cached
+cache.size
+```
+
+---
+
+## Persistent Sessions
+
+```ts
+import { createAgent } from '@devxiyang/agent-kernel'
+
+const agent = createAgent({
+  stream, tools, maxSteps: 8,
+  session: {
+    dir:       './.agent-sessions',
+    sessionId: 'my-session',
+    meta:      { title: 'Code review assistant' },
+  },
+})
+
+agent.prompt({ type: 'user', payload: { parts: [{ type: 'text', text: 'Summarize our last discussion.' }] } })
+await agent.waitForIdle()
+
+// Manual compaction when context grows
+const entries = agent.kernel.read()
+if (entries.length > 12) {
+  agent.kernel.compact(entries[0].id, entries[8].id, 'Summary of earlier context.')
+}
+```
+
+## Session Management
+
+```ts
+import { listSessions, deleteSession, updateSessionMeta } from '@devxiyang/agent-kernel/kernel'
+
+// List all sessions, sorted by most recently updated
+const sessions = listSessions('./.agent-sessions')
+// [
+//   { sessionId: 'my-session', updatedAt: 1740000000000, messageCount: 12,
+//     meta: { createdAt: 1739999000000, title: 'Code review assistant' } },
+// ]
+
+// Rename a session
+updateSessionMeta('./.agent-sessions', 'my-session', { title: 'New title' })
+
+// Delete a session
+deleteSession('./.agent-sessions', 'my-session')
+```
+
+All functions are safe to call on non-existent paths — `listSessions` returns `[]`, the others are silent no-ops.
+
+### `SessionInfo` type
+
+```ts
+type SessionMeta = {
+  createdAt: number   // Unix ms — set once, never overwritten
+  title?:    string
+}
+
+type SessionInfo = {
+  sessionId:    string
+  updatedAt:    number        // log.jsonl mtime in milliseconds
+  messageCount: number        // entries in log.jsonl
+  meta:         SessionMeta | null
+}
+```
 
 ---
 
@@ -318,83 +627,6 @@ const agent = createAgent({
 })
 
 agent.kernel.budget.set(80_000) // trigger at 80 k input tokens
-```
-
-### Steering & Follow-up
-
-Inject messages into a running or idle agent without re-prompting.
-
-```ts
-// Picked up on the next loop iteration
-agent.steer({ type: 'user', payload: { parts: [{ type: 'text', text: 'Focus on security.' }] } })
-
-// Triggers another run after the current one ends
-agent.followUp({ type: 'user', payload: { parts: [{ type: 'text', text: 'Now summarise.' }] } })
-```
-
----
-
-## Persistent Sessions
-
-```ts
-import { createAgent } from '@devxiyang/agent-kernel'
-
-const agent = createAgent({
-  stream, tools, maxSteps: 8,
-  session: {
-    dir:       './.agent-sessions',
-    sessionId: 'my-session',
-    meta:      { title: 'Code review assistant' },
-  },
-})
-
-agent.prompt({ type: 'user', payload: { parts: [{ type: 'text', text: 'Summarize our last discussion.' }] } })
-await agent.waitForIdle()
-
-// Manual compaction when context grows
-const entries = agent.kernel.read()
-if (entries.length > 12) {
-  agent.kernel.compact(entries[0].id, entries[8].id, 'Summary of earlier context.')
-}
-```
-
-Session files are written to `./.agent-sessions/<sessionId>/` (`kernel.jsonl`, `log.jsonl`, `meta.json`).
-
-## Session Management
-
-```ts
-import { listSessions, deleteSession, updateSessionMeta } from '@devxiyang/agent-kernel/kernel'
-
-// List all sessions, sorted by most recently updated
-const sessions = listSessions('./.agent-sessions')
-// [
-//   { sessionId: 'my-session', updatedAt: 1740000000000, messageCount: 12,
-//     meta: { createdAt: 1739999000000, title: 'Code review assistant' } },
-// ]
-
-// Rename a session
-updateSessionMeta('./.agent-sessions', 'my-session', { title: 'New title' })
-
-// Delete a session
-deleteSession('./.agent-sessions', 'my-session')
-```
-
-All functions are safe to call on non-existent paths — `listSessions` returns `[]`, the others are silent no-ops.
-
-### `SessionInfo` type
-
-```ts
-type SessionMeta = {
-  createdAt: number   // Unix ms — set once, never overwritten
-  title?:    string
-}
-
-type SessionInfo = {
-  sessionId:    string
-  updatedAt:    number        // log.jsonl mtime in milliseconds
-  messageCount: number        // entries in log.jsonl
-  meta:         SessionMeta | null
-}
 ```
 
 ---
