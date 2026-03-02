@@ -352,7 +352,7 @@ function entryToMessages(entry: AgentEntry): AgentMessage[] {
  * Uint8Array / ArrayBuffer → base64 string. URL → href string.
  */
 function normalizeContentPart(part: ContentPart): ContentPart {
-  if (part.type === 'text') return part
+  if ('text' in part) return part
   if ('url' in part) return part  // URL string stored as-is
   return { ...part, data: normalizeData(part.data) }
 }
