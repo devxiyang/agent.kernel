@@ -62,7 +62,7 @@ export type FileMediaType =
   | 'text/plain' | 'text/html' | 'text/csv' | 'text/markdown'
   | (string & {})
 
-export type TextPart  = { type: 'text';  text: string }
+export type TextPart  = { type: 'text' | 'context' | 'citation' | (string & {}); text: string }
 export type ImagePart = { type: 'image'; mediaType?: ImageMediaType } & MediaSource
 export type AudioPart = { type: 'audio'; mediaType?: AudioMediaType } & MediaSource
 export type VideoPart = { type: 'video'; mediaType?: VideoMediaType } & MediaSource
