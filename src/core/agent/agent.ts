@@ -63,7 +63,6 @@ export class Agent {
   private _parallelTools:    AgentOptions['parallelTools']
   private _onContextFull:    AgentOptions['onContextFull']
   private _toolTimeout:      AgentOptions['toolTimeout']
-  private _retryOnError:     AgentOptions['retryOnError']
 
   private _abortController:    AbortController | null = null
   private _steeringController: AbortController        = new AbortController()
@@ -93,7 +92,6 @@ export class Agent {
     this._parallelTools    = options.parallelTools
     this._onContextFull    = options.onContextFull
     this._toolTimeout      = options.toolTimeout
-    this._retryOnError     = options.retryOnError
   }
 
   // ── State ──────────────────────────────────────────────────────────────
@@ -267,7 +265,6 @@ export class Agent {
       parallelTools:       this._parallelTools,
       onContextFull:       this._onContextFull,
       toolTimeout:         this._toolTimeout,
-      retryOnError:        this._retryOnError,
     })
 
     this._runningPromise = this._consume(eventStream)

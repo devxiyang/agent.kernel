@@ -133,13 +133,8 @@ async function _run(
           }
         }
 
-        const streamCall = () => {
-          resetPartials()
-          return config.stream(messages, config.tools, makeOnEvent(), config.signal)
-        }
-        const stepResult = config.retryOnError
-          ? await withRetry(streamCall, config.retryOnError, config.signal)
-          : await streamCall()
+        resetPartials()
+        const stepResult = await config.stream(messages, config.tools, makeOnEvent(), config.signal)
 
         stepNumber++
         accumulateUsage(totalUsage, stepResult.usage)
@@ -427,30 +422,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, signal?: AbortSignal): 
     signal?.addEventListener('abort', clear)
     promise.then(v => { clear(); resolve(v) }, e => { clear(); reject(e) })
   })
-}
-
-// ─── withRetry ────────────────────────────────────────────────────────────────
-
-/**
- * Retry `fn` up to `opts.maxAttempts` times with a fixed `opts.delayMs` pause
- * between attempts. Aborts immediately if the signal is already cancelled.
- */
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  opts: { maxAttempts: number; delayMs: number },
-  signal?: AbortSignal,
-): Promise<T> {
-  let lastErr: unknown
-  for (let attempt = 1; attempt <= opts.maxAttempts; attempt++) {
-    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
-    try { return await fn() } catch (err) {
-      if (signal?.aborted) throw err
-      if (attempt === opts.maxAttempts) throw err
-      lastErr = err
-      await new Promise(r => setTimeout(r, opts.delayMs))
-    }
-  }
-  throw lastErr
 }
 
 // ─── accumulateUsage ──────────────────────────────────────────────────────────

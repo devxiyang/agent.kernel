@@ -201,12 +201,6 @@ export interface AgentConfig {
 
   /** Per-tool execution timeout in ms. Undefined = no timeout. */
   toolTimeout?: number
-
-  /** Retry config for LLM stream errors. */
-  retryOnError?: {
-    maxAttempts: number
-    delayMs:     number
-  }
 }
 
 // ─── Agent events ─────────────────────────────────────────────────────────────
@@ -272,5 +266,4 @@ export interface AgentOptions {
   parallelTools?:    AgentConfig['parallelTools']
   onContextFull?:    AgentConfig['onContextFull']
   toolTimeout?:      AgentConfig['toolTimeout']
-  retryOnError?:     AgentConfig['retryOnError']
 }
