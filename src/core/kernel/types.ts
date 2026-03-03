@@ -215,6 +215,8 @@ export interface AgentKernel {
 export type SessionMeta = {
   createdAt: number   // set once at creation, never overwritten
   title?:    string
+  pinned?:   boolean
+  [key: string]: unknown
 }
 
 // ─── Kernel options ──────────────────────────────────────────────────────────
