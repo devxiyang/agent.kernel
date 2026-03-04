@@ -315,12 +315,12 @@ function entryToMessages(entry: AgentEntry): AgentMessage[] {
       const parts: Array<
         | { type: 'text';      text: string }
         | { type: 'reasoning'; text: string }
-        | { type: 'tool-call'; toolCallId: string; toolName: string; input: Record<string, unknown> }
+        | { type: 'tool-call'; toolCallId: string; toolName: string; input: Record<string, unknown>; providerMetadata?: Record<string, Record<string, unknown>> }
       > = []
       if (reasoning) parts.push({ type: 'reasoning', text: reasoning })
       if (text)     parts.push({ type: 'text', text })
       for (const tc of toolCalls) {
-        parts.push({ type: 'tool-call', toolCallId: tc.toolCallId, toolName: tc.toolName, input: tc.input })
+        parts.push({ type: 'tool-call', toolCallId: tc.toolCallId, toolName: tc.toolName, input: tc.input, providerMetadata: tc.providerMetadata })
       }
       return [{ role: 'assistant', content: parts }]
     }

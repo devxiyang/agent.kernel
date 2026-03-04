@@ -81,7 +81,9 @@ export type ToolCallInfo = {
   toolCallId: string
   toolName:   string
   /** Raw JSON object the LLM produced as the tool's arguments. */
-  input:      Record<string, unknown>
+  input:            Record<string, unknown>
+  /** Provider-specific metadata (e.g. Gemini thought_signature). Keyed by provider name. */
+  providerMetadata?: Record<string, Record<string, unknown>>
 }
 
 /**
@@ -115,7 +117,7 @@ export type AgentMessage =
     content: string | Array<
       | TextPart
       | { type: 'reasoning'; text: string }
-      | { type: 'tool-call'; toolCallId: string; toolName: string; input: Record<string, unknown> }
+      | { type: 'tool-call'; toolCallId: string; toolName: string; input: Record<string, unknown>; providerMetadata?: Record<string, Record<string, unknown>> }
     >
   }
   | {

@@ -172,6 +172,39 @@ describe('Kernel (in-memory)', () => {
       expect(parts.some(p => p.type === 'tool-call')).toBe(true)
     })
 
+    it('tool call with providerMetadata → metadata passed through to message part', () => {
+      const k = createKernel()
+      const meta = { google: { thoughtSignature: 'abc123' } }
+      k.append({
+        type: 'assistant',
+        payload: {
+          text:      '',
+          toolCalls: [{ toolCallId: 'c1', toolName: 'search', input: { q: 'hi' }, providerMetadata: meta }],
+          stopReason: 'tool_use',
+        },
+      })
+      const msgs = k.buildMessages()
+      const parts = msgs[0].content as Array<{ type: string; providerMetadata?: unknown }>
+      const toolCallPart = parts.find(p => p.type === 'tool-call')
+      expect(toolCallPart?.providerMetadata).toEqual(meta)
+    })
+
+    it('tool call without providerMetadata → metadata is undefined in message part', () => {
+      const k = createKernel()
+      k.append({
+        type: 'assistant',
+        payload: {
+          text:      '',
+          toolCalls: [{ toolCallId: 'c1', toolName: 'search', input: { q: 'hi' } }],
+          stopReason: 'tool_use',
+        },
+      })
+      const msgs = k.buildMessages()
+      const parts = msgs[0].content as Array<{ type: string; providerMetadata?: unknown }>
+      const toolCallPart = parts.find(p => p.type === 'tool-call')
+      expect(toolCallPart?.providerMetadata).toBeUndefined()
+    })
+
     it('assistant entry with reasoning → array content', () => {
       const k = createKernel()
       k.append({
