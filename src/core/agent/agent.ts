@@ -14,7 +14,7 @@
  *   - Compaction decisions (caller checks kernel.contextSize and calls kernel.compact())
  */
 
-import type { AgentKernel, KernelOptions } from '../kernel'
+import type { AgentKernel, KernelOptions, AssistantPart } from '../kernel'
 import { createKernel } from '../kernel'
 import { runLoop } from './loop'
 import type {
@@ -170,7 +170,7 @@ export class Agent {
     const hasQueued = this._steeringQueue.length > 0 || this._followUpQueue.length > 0
 
     if (lastEntry.type === 'assistant') {
-      const { stopReason } = lastEntry.payload
+      const { stopReason } = lastEntry
       const isRetriable = stopReason === 'error' || stopReason === 'aborted'
       if (!isRetriable && !hasQueued) {
         throw new Error('Nothing to continue from. Use prompt() to start a new turn.')
@@ -344,14 +344,13 @@ export class Agent {
   }
 
   private _updateStreamEntry(): void {
-    this._streamEntry = {
-      type:    'assistant',
-      payload: {
-        text:      this._streamText,
-        reasoning:  this._streamReasoning || undefined,
-        toolCalls: this._streamToolCalls,
-      },
+    const parts: AssistantPart[] = []
+    if (this._streamReasoning) parts.push({ type: 'reasoning', text: this._streamReasoning })
+    if (this._streamText)      parts.push({ type: 'text', text: this._streamText })
+    for (const tc of this._streamToolCalls) {
+      parts.push({ type: 'tool-call', toolCallId: tc.toolCallId, toolName: tc.toolName, input: tc.input, providerMetadata: tc.providerMetadata })
     }
+    this._streamEntry = { type: 'assistant', parts }
   }
 
   private async _drainSteering(): Promise<AgentEntry[]> {

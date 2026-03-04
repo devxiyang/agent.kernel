@@ -11,6 +11,7 @@ import type {
   KernelOptions,
   SessionMeta,
   ContentPart,
+  AssistantPart,
   DataContent,
 } from './types'
 import { COMPACTION_TYPE } from './types'
@@ -114,7 +115,7 @@ class Kernel implements AgentKernel {
    * Also appends the summary to log.jsonl as a divider.
    */
   compact(fromId: number, toId: number, summaryText: string): AppendResult {
-    const summaryEntry: AgentEntry = { type: 'summary', payload: { text: summaryText } }
+    const summaryEntry: AgentEntry = { type: 'summary', text: summaryText }
 
     const compactionEntry: CompactionEntry = {
       type:    COMPACTION_TYPE,
@@ -299,28 +300,21 @@ class Kernel implements AgentKernel {
 function entryToMessages(entry: AgentEntry): AgentMessage[] {
   switch (entry.type) {
     case 'user': {
-      const { parts } = entry.payload
       // Shorthand: single text part → string content
-      if (parts.length === 1 && parts[0].type === 'text') {
-        return [{ role: 'user', content: parts[0].text }]
+      if (entry.parts.length === 1 && entry.parts[0].type === 'text') {
+        return [{ role: 'user', content: (entry.parts[0] as { text: string }).text }]
       }
-      return [{ role: 'user', content: parts }]
+      return [{ role: 'user', content: entry.parts }]
     }
 
     case 'assistant': {
-      const { text, reasoning, toolCalls } = entry.payload
-      if (!reasoning && toolCalls.length === 0) {
-        return [{ role: 'assistant', content: text }]
-      }
-      const parts: Array<
-        | { type: 'text';      text: string }
-        | { type: 'reasoning'; text: string }
-        | { type: 'tool-call'; toolCallId: string; toolName: string; input: Record<string, unknown>; providerMetadata?: Record<string, Record<string, unknown>> }
-      > = []
-      if (reasoning) parts.push({ type: 'reasoning', text: reasoning })
-      if (text)     parts.push({ type: 'text', text })
-      for (const tc of toolCalls) {
-        parts.push({ type: 'tool-call', toolCallId: tc.toolCallId, toolName: tc.toolName, input: tc.input, providerMetadata: tc.providerMetadata })
+      // Filter out empty text parts for the message representation
+      const parts: AssistantPart[] = entry.parts.filter(
+        p => !(p.type === 'text' && !(p as { text: string }).text),
+      )
+      // Shorthand: single text part → string content
+      if (parts.length === 1 && parts[0].type === 'text') {
+        return [{ role: 'assistant', content: (parts[0] as { text: string }).text }]
       }
       return [{ role: 'assistant', content: parts }]
     }
@@ -330,15 +324,15 @@ function entryToMessages(entry: AgentEntry): AgentMessage[] {
         role: 'tool',
         content: [{
           type:       'tool-result',
-          toolCallId: entry.payload.toolCallId,
-          toolName:   entry.payload.toolName,
-          content:    entry.payload.content,
-          isError:    entry.payload.isError,
+          toolCallId: entry.toolCallId,
+          toolName:   entry.toolName,
+          content:    entry.content,
+          isError:    entry.isError,
         }],
       }]
 
     case 'summary':
-      return [{ role: 'user', content: `[Context Summary]\n${entry.payload.text}` }]
+      return [{ role: 'user', content: `[Context Summary]\n${entry.text}` }]
 
     default:
       return []
@@ -377,13 +371,16 @@ function bufferToBase64(bytes: Uint8Array): string {
  */
 function normalizeEntry(entry: AgentEntry): AgentEntry {
   if (entry.type === 'user') {
-    return { ...entry, payload: { parts: entry.payload.parts.map(normalizeContentPart) } }
+    return { ...entry, parts: entry.parts.map(normalizeContentPart) }
   }
-  if (entry.type === 'tool_result' && Array.isArray(entry.payload.content)) {
+  if (entry.type === 'assistant') {
     return {
       ...entry,
-      payload: { ...entry.payload, content: entry.payload.content.map(normalizeContentPart) },
+      parts: entry.parts.map(p => 'data' in p ? normalizeContentPart(p as ContentPart) as AssistantPart : p),
     }
+  }
+  if (entry.type === 'tool_result' && Array.isArray(entry.content)) {
+    return { ...entry, content: entry.content.map(normalizeContentPart) }
   }
   return entry
 }

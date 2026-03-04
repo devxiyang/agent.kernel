@@ -22,7 +22,7 @@
 
 import { Value } from '@sinclair/typebox/value'
 import { EventStream } from '../../event-stream'
-import type { AgentKernel } from '../kernel'
+import type { AgentKernel, AssistantPart } from '../kernel'
 import type {
   AgentEntry,
   AgentConfig,
@@ -109,7 +109,7 @@ async function _run(
         const messages    = await config.transformContext?.(rawMessages, config.signal) ?? rawMessages
 
         // Signal start of assistant message
-        stream.push({ type: 'message_start', entry: { type: 'assistant', payload: { text: '', toolCalls: [] } } })
+        stream.push({ type: 'message_start', entry: { type: 'assistant', parts: [] } })
 
         // Reset per-step partial tracking (also reset before each retry attempt)
         const resetPartials = () => {
@@ -140,15 +140,21 @@ async function _run(
         accumulateUsage(totalUsage, stepResult.usage)
 
         // Write the assistant turn to kernel
+        const assistantParts: AssistantPart[] = []
+        if (stepResult.reasoning) {
+          assistantParts.push({ type: 'reasoning', text: stepResult.reasoning.text, providerMetadata: stepResult.reasoning.providerMetadata })
+        }
+        if (stepResult.text) {
+          assistantParts.push({ type: 'text', text: stepResult.text })
+        }
+        for (const tc of stepResult.toolCalls) {
+          assistantParts.push({ type: 'tool-call', toolCallId: tc.toolCallId, toolName: tc.toolName, input: tc.input, providerMetadata: tc.providerMetadata })
+        }
         const assistantEntry: AgentEntry = {
-          type:    'assistant',
-          payload: {
-            text:       stepResult.text,
-            reasoning:  stepResult.reasoning,
-            toolCalls:  stepResult.toolCalls,
-            stopReason: stepResult.stopReason,
-          },
-          usage: stepResult.usage,
+          type:       'assistant',
+          parts:      assistantParts,
+          usage:      stepResult.usage,
+          stopReason: stepResult.stopReason,
         }
         kernel.append(assistantEntry)
 
@@ -219,9 +225,15 @@ async function _run(
     // Only add the error field when nothing useful was streamed.
     // Use step-scoped partials — previous steps are already committed to kernel.
     const hasContent = stepText.trim().length > 0 || stepReasoning.trim().length > 0 || partialToolCalls.length > 0
+    const errorParts: AssistantPart[] = []
+    if (stepReasoning) errorParts.push({ type: 'reasoning', text: stepReasoning })
+    if (stepText)      errorParts.push({ type: 'text', text: stepText })
+    for (const tc of partialToolCalls) {
+      errorParts.push({ type: 'tool-call', toolCallId: tc.toolCallId, toolName: tc.toolName, input: tc.input, providerMetadata: tc.providerMetadata })
+    }
     const errorEntry: AgentEntry = hasContent
-      ? { type: 'assistant', payload: { text: stepText, reasoning: stepReasoning || undefined, toolCalls: partialToolCalls, stopReason } }
-      : { type: 'assistant', payload: { text: '', toolCalls: [], stopReason, error: errorMessage } }
+      ? { type: 'assistant', parts: errorParts, stopReason }
+      : { type: 'assistant', parts: [], stopReason, error: errorMessage }
     kernel.append(errorEntry)
     stream.push({ type: 'message_end', entry: errorEntry })
     stream.push({ type: 'turn_end', toolResults: [] })
@@ -293,11 +305,7 @@ async function executeToolsSequential(
     const result = await runSingleTool(tc, tools, stream, signal, toolTimeout)
 
     const { content, isError, details } = result
-    const toolResultEntry: AgentEntry = {
-      type:    'tool_result',
-      payload: { toolCallId: tc.toolCallId, toolName: tc.toolName, content, isError },
-    }
-    kernel.append(toolResultEntry)
+    kernel.append({ type: 'tool_result', toolCallId: tc.toolCallId, toolName: tc.toolName, content, isError })
     stream.push({ type: 'tool_result', toolCallId: tc.toolCallId, content, isError, details })
     toolResults.push({ toolCallId: tc.toolCallId, toolName: tc.toolName, content, isError, details })
 
@@ -362,11 +370,7 @@ async function executeToolsParallel(
       : { content: outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason), isError: true }
 
     const { content, isError, details } = result
-    const toolResultEntry: AgentEntry = {
-      type:    'tool_result',
-      payload: { toolCallId: tc.toolCallId, toolName: tc.toolName, content, isError },
-    }
-    kernel.append(toolResultEntry)
+    kernel.append({ type: 'tool_result', toolCallId: tc.toolCallId, toolName: tc.toolName, content, isError })
     stream.push({ type: 'tool_result', toolCallId: tc.toolCallId, content, isError, details })
     toolResults.push({ toolCallId: tc.toolCallId, toolName: tc.toolName, content, isError, details })
   }
@@ -478,10 +482,7 @@ function skipTool(
   stream:     EventStream<AgentEvent, AgentResult>,
 ): ToolResult {
   const content = 'Skipped: user interrupted.'
-  kernel.append({
-    type:    'tool_result',
-    payload: { toolCallId, toolName, content, isError: true },
-  })
+  kernel.append({ type: 'tool_result', toolCallId, toolName, content, isError: true })
   stream.push({ type: 'tool_result', toolCallId, content, isError: true })
   return { content, isError: true }
 }

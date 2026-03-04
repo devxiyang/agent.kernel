@@ -20,8 +20,8 @@ afterEach(() => {
 function seedSession(sessionId: string, withMessages = true): void {
   const kernel = createKernel({ dir: baseDir, sessionId })
   if (withMessages) {
-    kernel.append({ type: 'user', payload: { parts: [{ type: 'text', text: 'hello' }] } })
-    kernel.append({ type: 'assistant', payload: { text: 'reply', toolCalls: [], stopReason: 'stop' } })
+    kernel.append({ type: 'user', parts: [{ type: 'text', text: 'hello' }] })
+    kernel.append({ type: 'assistant', parts: [{ type: 'text', text: 'reply' }], stopReason: 'stop' })
   }
 }
 
