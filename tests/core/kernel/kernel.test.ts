@@ -32,14 +32,15 @@ function makeUsage(input = 0, output = 0) {
 }
 
 function userEntry(text: string): AgentEntry {
-  return { type: 'user', payload: { parts: [{ type: 'text', text }] } }
+  return { type: 'user', parts: [{ type: 'text', text }] }
 }
 
 function assistantEntry(text: string, inputTokens = 0): AgentEntry {
   return {
-    type:    'assistant',
-    payload: { text, toolCalls: [], stopReason: 'stop' },
-    usage:   makeUsage(inputTokens),
+    type:       'assistant',
+    parts:      text ? [{ type: 'text', text }] : [],
+    stopReason: 'stop',
+    usage:      makeUsage(inputTokens),
   }
 }
 
@@ -135,13 +136,11 @@ describe('Kernel (in-memory)', () => {
     it('multi-part user entry → array content', () => {
       const k = createKernel()
       k.append({
-        type: 'user',
-        payload: {
-          parts: [
-            { type: 'text', text: 'look at this' },
-            { type: 'text', text: 'and this' },
-          ],
-        },
+        type:  'user',
+        parts: [
+          { type: 'text', text: 'look at this' },
+          { type: 'text', text: 'and this' },
+        ],
       })
       const msgs = k.buildMessages()
       expect(msgs[0].role).toBe('user')
@@ -158,12 +157,9 @@ describe('Kernel (in-memory)', () => {
     it('assistant entry with tool calls → array content', () => {
       const k = createKernel()
       k.append({
-        type: 'assistant',
-        payload: {
-          text:      '',
-          toolCalls: [{ toolCallId: 'c1', toolName: 'search', input: { q: 'hi' } }],
-          stopReason: 'tool_use',
-        },
+        type:  'assistant',
+        parts: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'search', input: { q: 'hi' } }],
+        stopReason: 'tool_use',
       })
       const msgs = k.buildMessages()
       expect(msgs[0].role).toBe('assistant')
@@ -172,16 +168,39 @@ describe('Kernel (in-memory)', () => {
       expect(parts.some(p => p.type === 'tool-call')).toBe(true)
     })
 
+    it('tool call with providerMetadata → metadata passed through to message part', () => {
+      const k = createKernel()
+      const meta = { google: { thoughtSignature: 'abc123' } }
+      k.append({
+        type:  'assistant',
+        parts: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'search', input: { q: 'hi' }, providerMetadata: meta }],
+        stopReason: 'tool_use',
+      })
+      const msgs = k.buildMessages()
+      const parts = msgs[0].content as Array<{ type: string; providerMetadata?: unknown }>
+      const toolCallPart = parts.find(p => p.type === 'tool-call')
+      expect(toolCallPart?.providerMetadata).toEqual(meta)
+    })
+
+    it('tool call without providerMetadata → metadata is undefined in message part', () => {
+      const k = createKernel()
+      k.append({
+        type:  'assistant',
+        parts: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'search', input: { q: 'hi' } }],
+        stopReason: 'tool_use',
+      })
+      const msgs = k.buildMessages()
+      const parts = msgs[0].content as Array<{ type: string; providerMetadata?: unknown }>
+      const toolCallPart = parts.find(p => p.type === 'tool-call')
+      expect(toolCallPart?.providerMetadata).toBeUndefined()
+    })
+
     it('assistant entry with reasoning → array content', () => {
       const k = createKernel()
       k.append({
-        type: 'assistant',
-        payload: {
-          text:      'answer',
-          reasoning: 'let me think',
-          toolCalls: [],
-          stopReason: 'stop',
-        },
+        type:  'assistant',
+        parts: [{ type: 'reasoning', text: 'let me think' }, { type: 'text', text: 'answer' }],
+        stopReason: 'stop',
       })
       const msgs = k.buildMessages()
       expect(Array.isArray(msgs[0].content)).toBe(true)
@@ -192,8 +211,7 @@ describe('Kernel (in-memory)', () => {
     it('tool_result entry → role:tool message', () => {
       const k = createKernel()
       k.append({
-        type:    'tool_result',
-        payload: { toolCallId: 'c1', toolName: 'search', content: 'result', isError: false },
+        type: 'tool_result', toolCallId: 'c1', toolName: 'search', content: 'result', isError: false,
       })
       const msgs = k.buildMessages()
       expect(msgs[0].role).toBe('tool')
@@ -201,7 +219,7 @@ describe('Kernel (in-memory)', () => {
 
     it('summary entry → user message with Context Summary prefix', () => {
       const k = createKernel()
-      k.append({ type: 'summary', payload: { text: 'Prior context...' } })
+      k.append({ type: 'summary', text: 'Prior context...' })
       const msgs = k.buildMessages()
       expect(msgs[0].role).toBe('user')
       expect((msgs[0].content as string)).toContain('[Context Summary]')

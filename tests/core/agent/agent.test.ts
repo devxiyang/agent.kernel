@@ -36,7 +36,7 @@ function defaultOptions(overrides: Partial<AgentOptions> = {}): AgentOptions {
 }
 
 function userEntry(text: string): AgentEntry {
-  return { type: 'user', payload: { parts: [{ type: 'text', text }] } }
+  return { type: 'user', parts: [{ type: 'text', text }] }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -247,7 +247,7 @@ describe('Agent', () => {
       agent.prompt(userEntry('hi'))
       await agent.waitForIdle()
       const withText = streamEntries.filter(
-        e => e?.type === 'assistant' && (e.payload as { text: string }).text.length > 0,
+        e => e?.type === 'assistant' && e.parts.some(p => p.type === 'text' && (p as { text: string }).text.length > 0),
       )
       expect(withText.length).toBeGreaterThan(0)
     })
@@ -389,7 +389,7 @@ describe('Agent', () => {
       // Stream called at least once; steering entry should be in kernel
       const entries = kernel.read()
       expect(entries.some(
-        e => e.type === 'user' && (e.payload as { parts: Array<{ text: string }> }).parts[0].text === 'steer me',
+        e => e.type === 'user' && (e.parts[0] as { text: string }).text === 'steer me',
       )).toBe(true)
     })
 
@@ -411,7 +411,7 @@ describe('Agent', () => {
 
       const steerEntries = kernel.read().filter(
         e => e.type === 'user' && ['steer-1', 'steer-2'].includes(
-          (e.payload as { parts: Array<{ text: string }> }).parts[0].text,
+          (e.parts[0] as { text: string }).text,
         ),
       )
       // Both should be processed eventually
@@ -427,7 +427,7 @@ describe('Agent', () => {
       await agent.waitForIdle()
       const steerEntries = kernel.read().filter(
         e => e.type === 'user' && ['s1', 's2'].includes(
-          (e.payload as { parts: Array<{ text: string }> }).parts[0].text,
+          (e.parts[0] as { text: string }).text,
         ),
       )
       expect(steerEntries.length).toBe(2)

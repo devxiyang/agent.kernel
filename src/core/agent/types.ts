@@ -44,7 +44,7 @@ export type LLMStopReason = 'stop' | 'tool_use' | 'length' | 'content_filter' | 
  */
 export type LLMStepResult = {
   text:       string
-  reasoning?: string
+  reasoning?: { text: string; providerMetadata?: Record<string, Record<string, unknown>> }
   toolCalls:  ToolCallInfo[]
   stopReason: LLMStopReason
   usage:      Usage

@@ -81,22 +81,45 @@ export type ToolCallInfo = {
   toolCallId: string
   toolName:   string
   /** Raw JSON object the LLM produced as the tool's arguments. */
-  input:      Record<string, unknown>
+  input:            Record<string, unknown>
+  /** Provider-specific metadata (e.g. Gemini thought_signature). Keyed by provider name. */
+  providerMetadata?: Record<string, Record<string, unknown>>
 }
+
+/** A reasoning/thinking block produced by the model. */
+export type ReasoningPart = {
+  type: 'reasoning'
+  text: string
+  /** Provider-specific metadata (e.g. Anthropic thinking signature). Keyed by provider name. */
+  providerMetadata?: Record<string, Record<string, unknown>>
+}
+
+/** A tool invocation requested by the model. */
+export type ToolCallPart = {
+  type:       'tool-call'
+  toolCallId: string
+  toolName:   string
+  input:      Record<string, unknown>
+  /** Provider-specific metadata (e.g. Gemini thought_signature). Keyed by provider name. */
+  providerMetadata?: Record<string, Record<string, unknown>>
+}
+
+/** Union of all parts that can appear in an assistant message. */
+export type AssistantPart = ContentPart | ReasoningPart | ToolCallPart
 
 /**
  * A single turn in the conversation, as stored in the kernel.
  *
  * - user        — one or more content parts from the human
- * - assistant   — model response: text, optional reasoning, and/or tool calls
+ * - assistant   — model response as an ordered list of parts (text, reasoning, tool-calls, media)
  * - tool_result — result of executing a tool requested by the model
  * - summary     — compacted representation of a range of earlier entries
  */
 export type AgentEntry =
-  | { type: 'user';        payload: { parts: ContentPart[] } }
-  | { type: 'assistant';   payload: { text: string; reasoning?: string; toolCalls: ToolCallInfo[]; stopReason?: StopReason; error?: string }; usage?: Usage }
-  | { type: 'tool_result'; payload: { toolCallId: string; toolName: string; content: string | ContentPart[]; isError: boolean } }
-  | { type: 'summary';     payload: { text: string } }
+  | { type: 'user';        parts: ContentPart[] }
+  | { type: 'assistant';   parts: AssistantPart[]; usage?: Usage; stopReason?: StopReason; error?: string }
+  | { type: 'tool_result'; toolCallId: string; toolName: string; content: string | ContentPart[]; isError: boolean }
+  | { type: 'summary';     text: string }
 
 // ─── AgentMessage (provider-agnostic LLM message format) ─────────────────────
 
@@ -112,11 +135,7 @@ export type AgentMessage =
   }
   | {
     role: 'assistant'
-    content: string | Array<
-      | TextPart
-      | { type: 'reasoning'; text: string }
-      | { type: 'tool-call'; toolCallId: string; toolName: string; input: Record<string, unknown> }
-    >
+    content: string | AssistantPart[]
   }
   | {
     role: 'tool'

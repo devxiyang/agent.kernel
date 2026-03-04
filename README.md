@@ -21,6 +21,7 @@ A provider-agnostic agent runtime for TypeScript. Bring your own LLM — `agent-
 - **Stream error retry** — automatic retry with configurable delay for transient LLM errors
 - **Session metadata** — attach titles and custom fields to sessions; query with `listSessions`
 - **Kernel cache** — LRU + TTL in-memory cache for session kernels
+- **Provider metadata passthrough** — attach provider-specific metadata (e.g. Gemini `thought_signature`) to tool calls via `providerMetadata`; propagated from `ToolCallInfo` through to `AgentMessage` so `StreamFn` adapters can read it
 
 ## Install
 
@@ -458,6 +459,21 @@ type StreamFn = (
 
 The function receives the full conversation and tool list on every call. Use `tool.parameters` (plain JSON Schema) to generate provider-specific tool definitions.
 
+### `providerMetadata` in tool calls
+
+Some providers attach extra data to a function call that is separate from the tool's input arguments (e.g. Google Gemini attaches a `thought_signature` to reasoning-enabled models). Return this data in `ToolCallInfo.providerMetadata` — a `Record<string, Record<string, unknown>>` keyed by provider name:
+
+```ts
+toolCalls.push({
+  toolCallId: chunk.toolCallId,
+  toolName:   chunk.toolName,
+  input:      chunk.args as Record<string, unknown>,
+  providerMetadata: chunk.providerMetadata ?? undefined,  // e.g. { google: { thoughtSignature: '...' } }
+})
+```
+
+The kernel propagates `providerMetadata` from `ToolCallInfo` into the `tool-call` part of the assistant message returned by `kernel.buildMessages()`. This means the next `StreamFn` call receives the metadata on the reconstructed message, which is required for providers like Gemini that need the `thought_signature` echoed back.
+
 ---
 
 ## Adapter Examples
@@ -564,9 +580,14 @@ export const aiSdkStream: StreamFn = async (messages, tools, onEvent, signal) =>
       onEvent({ type: 'text-delta', delta: chunk.textDelta })
     }
     if (chunk.type === 'tool-call') {
-      const tc = { toolCallId: chunk.toolCallId, toolName: chunk.toolName, input: chunk.input as Record<string, unknown> }
+      const tc = {
+        toolCallId:       chunk.toolCallId,
+        toolName:         chunk.toolName,
+        input:            chunk.input as Record<string, unknown>,
+        providerMetadata: chunk.providerMetadata ?? undefined,  // e.g. { google: { thoughtSignature } }
+      }
       toolCalls.push(tc)
-      onEvent({ type: 'tool-call', ...tc })
+      onEvent({ type: 'tool-call', toolCallId: tc.toolCallId, toolName: tc.toolName, input: tc.input })
     }
   }
 

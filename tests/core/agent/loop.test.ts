@@ -59,7 +59,7 @@ async function collectEvents(
 ): Promise<{ events: AgentEvent[]; result: Awaited<ReturnType<typeof runLoop.prototype.result>> }> {
   const kernel = createKernel()
   // Seed a user message so there's something to send to the LLM
-  kernel.append({ type: 'user', payload: { parts: [{ type: 'text', text: 'hi' }] } })
+  kernel.append({ type: 'user', parts: [{ type: 'text', text: 'hi' }] })
   return collectEventsFromKernel(kernel, config)
 }
 
@@ -121,7 +121,7 @@ describe('runLoop', () => {
   it('emits reasoning_delta events', async () => {
     const cfg = baseConfig({
       stream: mockStream(
-        stepResult({ reasoning: 'thinking...' }),
+        stepResult({ reasoning: { text: 'thinking...' } }),
         [{ type: 'reasoning-delta', delta: 'thinking...' }],
       ),
     })
@@ -322,7 +322,7 @@ describe('runLoop', () => {
       const getSteeringMessages = vi.fn().mockImplementation(async () => {
         if (!steeringConsumed) {
           steeringConsumed = true
-          return [{ type: 'user' as const, payload: { parts: [{ type: 'text' as const, text: 'steer' }] } }]
+          return [{ type: 'user' as const, parts: [{ type: 'text' as const, text: 'steer' }] }]
         }
         return []
       })
@@ -346,7 +346,7 @@ describe('runLoop', () => {
       const getFollowUpMessages = vi.fn().mockImplementation(async () => {
         if (!followUpSent) {
           followUpSent = true
-          return [{ type: 'user' as const, payload: { parts: [{ type: 'text' as const, text: 'follow up' }] } }]
+          return [{ type: 'user' as const, parts: [{ type: 'text' as const, text: 'follow up' }] }]
         }
         return []
       })
@@ -491,7 +491,7 @@ describe('runLoop', () => {
       const getSteeringMessages = vi.fn().mockImplementation(async () => {
         steeringCalls++
         if (steeringCalls > 1 && toolsStarted) {
-          return [{ type: 'user' as const, payload: { parts: [{ type: 'text' as const, text: 'interrupt' }] } }]
+          return [{ type: 'user' as const, parts: [{ type: 'text' as const, text: 'interrupt' }] }]
         }
         return []
       })
@@ -588,7 +588,7 @@ describe('runLoop', () => {
   describe('onContextFull', () => {
     it('fires the callback when contextSize >= budget.limit', async () => {
       const kernel = createKernel()
-      kernel.append({ type: 'user', payload: { parts: [{ type: 'text', text: 'hi' }] } })
+      kernel.append({ type: 'user', parts: [{ type: 'text', text: 'hi' }] })
       kernel.budget.set(5) // limit = 5 tokens
 
       const onContextFull = vi.fn().mockResolvedValue(undefined)
@@ -612,7 +612,7 @@ describe('runLoop', () => {
 
     it('does not fire when contextSize is below budget.limit', async () => {
       const kernel = createKernel()
-      kernel.append({ type: 'user', payload: { parts: [{ type: 'text', text: 'hi' }] } })
+      kernel.append({ type: 'user', parts: [{ type: 'text', text: 'hi' }] })
       kernel.budget.set(100)
 
       const onContextFull = vi.fn().mockResolvedValue(undefined)
@@ -694,7 +694,7 @@ describe('runLoop', () => {
         // Only return steering after tool1 has actually been aborted
         if (tool1Aborted && !steeringDelivered) {
           steeringDelivered = true
-          return [{ type: 'user' as const, payload: { parts: [{ type: 'text' as const, text: 'stop' }] } }]
+          return [{ type: 'user' as const, parts: [{ type: 'text' as const, text: 'stop' }] }]
         }
         return []
       })
@@ -807,7 +807,7 @@ describe('runLoop', () => {
       const getSteeringMessages = vi.fn().mockImplementation(async () => {
         if (firstBatchAborted && !steeringDelivered) {
           steeringDelivered = true
-          return [{ type: 'user' as const, payload: { parts: [{ type: 'text' as const, text: 'redirect' }] } }]
+          return [{ type: 'user' as const, parts: [{ type: 'text' as const, text: 'redirect' }] }]
         }
         return []
       })
@@ -863,7 +863,7 @@ describe('runLoop', () => {
       const getSteeringMessages = vi.fn().mockImplementation(async () => {
         if (tool1Done && !steeringDelivered) {
           steeringDelivered = true
-          return [{ type: 'user' as const, payload: { parts: [{ type: 'text' as const, text: 'interrupt' }] } }]
+          return [{ type: 'user' as const, parts: [{ type: 'text' as const, text: 'interrupt' }] }]
         }
         return []
       })
