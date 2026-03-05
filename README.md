@@ -14,19 +14,21 @@ A provider-agnostic agent runtime for TypeScript. Bring your own LLM — `agent-
 - **Typed tool execution** — TypeBox schemas drive runtime validation, coercion, and LLM schema generation
 - **Parallel tool execution** — run all tool calls in a turn concurrently
 - **Tool timeout** — per-call deadline; timed-out tools return an error result the LLM can handle
-- **Persistent sessions** — optional file-backed conversation history, survives restarts
+- **Persistent threads** — optional file-backed conversation history, survives restarts
 - **Conversation compaction** — replace old entries with a summary to stay within context limits
 - **Auto-compaction hook** — `onContextFull` fires when the token budget is reached
 - **Steering & follow-up** — inject messages mid-run; steering immediately aborts all running tools via `AbortSignal`
 - **Stream error retry** — automatic retry with configurable delay for transient LLM errors
-- **Session metadata** — attach titles and custom fields to sessions; query with `listSessions`
-- **Kernel cache** — LRU + TTL in-memory cache for session kernels
+- **Thread metadata** — attach titles and custom fields to threads; query with `listThreads`
+- **Kernel cache** — LRU + TTL in-memory cache for thread kernels
 - **Provider metadata passthrough** — attach provider-specific metadata (e.g. Gemini `thought_signature`) to tool calls via `providerMetadata`; propagated from `ToolCallInfo` through to `AgentMessage` so `StreamFn` adapters can read it
+
+> **Requires v0.2.0 or later.** v0.2.0 introduced breaking changes: `session` terminology has been renamed to `thread` throughout the API (`sessionId` → `threadId`, `listSessions` → `listThreads`, `SessionMeta` → `ThreadMeta`, etc.). Earlier versions are incompatible with this documentation.
 
 ## Install
 
 ```bash
-npm install @devxiyang/agent-kernel
+npm install @devxiyang/agent-kernel@^0.2.0
 ```
 
 `@sinclair/typebox` is a required peer dependency for tool parameter schemas:
@@ -88,7 +90,7 @@ await agent.waitForIdle()
 |---|---|
 | `@devxiyang/agent-kernel` | `Agent`, `createAgent`, `runLoop`, `wrapTool`, `EventStream`, all types |
 | `@devxiyang/agent-kernel/agent` | Agent module only |
-| `@devxiyang/agent-kernel/kernel` | `createKernel`, `KernelCache`, `listSessions`, `deleteSession`, `updateSessionMeta`, kernel types |
+| `@devxiyang/agent-kernel/kernel` | `createKernel`, `KernelCache`, `listThreads`, `deleteThread`, `updateThreadMeta`, kernel types |
 | `@devxiyang/agent-kernel/event-stream` | `EventStream` |
 
 ## Core Concepts
@@ -220,10 +222,10 @@ import { createKernel } from '@devxiyang/agent-kernel/kernel'
 // In-memory only (useful for testing)
 const kernel = createKernel()
 
-// File-backed — loads from disk if session exists
+// File-backed — loads from disk if thread exists
 const kernel = createKernel({
-  dir:       './.agent-sessions',
-  sessionId: 'my-session',
+  dir:       './.agent-threads',
+  threadId: 'my-thread',
   meta:      { title: 'Code review assistant' },
 })
 ```
@@ -283,27 +285,27 @@ Compaction rewrites `kernel.jsonl` to the clean current branch and appends a div
 kernel.branch(toId)
 ```
 
-### Session files
+### Thread files
 
-Each session writes three files to `<dir>/<sessionId>/`:
+Each thread writes three files to `<dir>/<threadId>/`:
 
 | File | Contents |
 |---|---|
 | `kernel.jsonl` | Current branch only; rewritten on compaction |
 | `log.jsonl` | Append-only full history; never compacted; used for UI display |
-| `meta.json` | Session metadata (`createdAt`, `title`, custom fields) |
+| `meta.json` | Thread metadata (`createdAt`, `title`, custom fields) |
 
 ---
 
 ## KernelCache
 
-When an agent handles multiple sessions, recreating a `Kernel` from `kernel.jsonl` on every request adds unnecessary I/O. `KernelCache` keeps hot kernels in memory with LRU eviction and TTL expiry.
+When an agent handles multiple threads, recreating a `Kernel` from `kernel.jsonl` on every request adds unnecessary I/O. `KernelCache` keeps hot kernels in memory with LRU eviction and TTL expiry.
 
 ```ts
 import { KernelCache } from '@devxiyang/agent-kernel/kernel'
 
 const cache = new KernelCache({
-  dir:     './.agent-sessions',
+  dir:     './.agent-threads',
   maxSize: 100,           // keep at most 100 kernels in memory (default: 50)
   ttl:     15 * 60_000,   // evict after 15 min of inactivity (default: 30 min)
 })
@@ -312,9 +314,9 @@ const cache = new KernelCache({
 ### Per-request pattern
 
 ```ts
-async function handleRequest(sessionId: string, text: string) {
+async function handleRequest(threadId: string, text: string) {
   // Kernel is reused across requests; Agent is lightweight, created fresh each time
-  const kernel = cache.get(sessionId)
+  const kernel = cache.get(threadId)
   const agent  = new Agent(kernel, { stream, tools, maxSteps: 8 })
 
   agent.subscribe(event => { /* forward events to client */ })
@@ -329,14 +331,14 @@ The `Agent` is cheap to construct (no I/O, no async work) so creating one per re
 ### Cache API
 
 ```ts
-// Get or create a kernel for sessionId; updates LRU order and resets TTL
-const kernel = cache.get(sessionId)
+// Get or create a kernel for threadId; updates LRU order and resets TTL
+const kernel = cache.get(threadId)
 
 // Optionally pass metadata written to meta.json on first creation
-const kernel = cache.get(sessionId, { title: 'My session' })
+const kernel = cache.get(threadId, { title: 'My thread' })
 
-// Remove a specific session from cache (kernel.jsonl is not touched)
-cache.evict(sessionId)
+// Remove a specific thread from cache (kernel.jsonl is not touched)
+cache.evict(threadId)
 
 // Remove all cached kernels
 cache.clear()
@@ -347,16 +349,16 @@ cache.size
 
 ---
 
-## Persistent Sessions
+## Persistent Threads
 
 ```ts
 import { createAgent } from '@devxiyang/agent-kernel'
 
 const agent = createAgent({
   stream, tools, maxSteps: 8,
-  session: {
-    dir:       './.agent-sessions',
-    sessionId: 'my-session',
+  thread: {
+    dir:       './.agent-threads',
+    threadId: 'my-thread',
     meta:      { title: 'Code review assistant' },
   },
 })
@@ -371,40 +373,40 @@ if (entries.length > 12) {
 }
 ```
 
-## Session Management
+## Thread Management
 
 ```ts
-import { listSessions, deleteSession, updateSessionMeta } from '@devxiyang/agent-kernel/kernel'
+import { listThreads, deleteThread, updateThreadMeta } from '@devxiyang/agent-kernel/kernel'
 
-// List all sessions, sorted by most recently updated
-const sessions = listSessions('./.agent-sessions')
+// List all threads, sorted by most recently updated
+const threads = listThreads('./.agent-threads')
 // [
-//   { sessionId: 'my-session', updatedAt: 1740000000000, messageCount: 12,
+//   { threadId: 'my-thread', updatedAt: 1740000000000, messageCount: 12,
 //     meta: { createdAt: 1739999000000, title: 'Code review assistant' } },
 // ]
 
-// Rename a session
-updateSessionMeta('./.agent-sessions', 'my-session', { title: 'New title' })
+// Rename a thread
+updateThreadMeta('./.agent-threads', 'my-thread', { title: 'New title' })
 
-// Delete a session
-deleteSession('./.agent-sessions', 'my-session')
+// Delete a thread
+deleteThread('./.agent-threads', 'my-thread')
 ```
 
-All functions are safe to call on non-existent paths — `listSessions` returns `[]`, the others are silent no-ops.
+All functions are safe to call on non-existent paths — `listThreads` returns `[]`, the others are silent no-ops.
 
-### `SessionInfo` type
+### `ThreadInfo` type
 
 ```ts
-type SessionMeta = {
+type ThreadMeta = {
   createdAt: number   // Unix ms — set once, never overwritten
   title?:    string
 }
 
-type SessionInfo = {
-  sessionId:    string
+type ThreadInfo = {
+  threadId:    string
   updatedAt:    number        // log.jsonl mtime in milliseconds
   messageCount: number        // entries in log.jsonl
-  meta:         SessionMeta | null
+  meta:         ThreadMeta | null
 }
 ```
 
