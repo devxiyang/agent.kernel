@@ -26,7 +26,7 @@ A provider-agnostic agent runtime for TypeScript. Bring your own LLM — `agent-
 ## Install
 
 ```bash
-npm install @devxiyang/agent-kernel
+npm install @devxiyang/agent-kernel@latest
 ```
 
 `@sinclair/typebox` is a required peer dependency for tool parameter schemas:
