@@ -23,12 +23,10 @@ A provider-agnostic agent runtime for TypeScript. Bring your own LLM — `agent-
 - **Kernel cache** — LRU + TTL in-memory cache for thread kernels
 - **Provider metadata passthrough** — attach provider-specific metadata (e.g. Gemini `thought_signature`) to tool calls via `providerMetadata`; propagated from `ToolCallInfo` through to `AgentMessage` so `StreamFn` adapters can read it
 
-> **Requires v0.2.0 or later.** v0.2.0 introduced breaking changes: `session` terminology has been renamed to `thread` throughout the API (`sessionId` → `threadId`, `listSessions` → `listThreads`, `SessionMeta` → `ThreadMeta`, etc.). Earlier versions are incompatible with this documentation.
-
 ## Install
 
 ```bash
-npm install @devxiyang/agent-kernel@^0.2.0
+npm install @devxiyang/agent-kernel
 ```
 
 `@sinclair/typebox` is a required peer dependency for tool parameter schemas:
