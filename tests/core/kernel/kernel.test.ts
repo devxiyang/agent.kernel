@@ -265,7 +265,7 @@ describe('Kernel (in-memory)', () => {
 
     it('persists appended entries to log.jsonl and readLog() returns them', () => {
       const dir = makeTmpDir()
-      const k = createKernel({ dir, sessionId: 'sess1' })
+      const k = createKernel({ dir, threadId: 'sess1' })
       k.append(userEntry('hello'))
       k.append(assistantEntry('world'))
 
@@ -277,7 +277,7 @@ describe('Kernel (in-memory)', () => {
 
     it('readLog() survives compaction — still shows full history', () => {
       const dir = makeTmpDir()
-      const k = createKernel({ dir, sessionId: 'sess2' })
+      const k = createKernel({ dir, threadId: 'sess2' })
       k.append(userEntry('a'))
       k.append(assistantEntry('b'))
       const r0 = k.read()[0]
@@ -292,15 +292,15 @@ describe('Kernel (in-memory)', () => {
 
     it('kernel state is restored from kernel.jsonl on construction', () => {
       const dir = makeTmpDir()
-      const sessionId = 'sess3'
+      const threadId = 'sess3'
 
       // Write entries with kernel1
-      const k1 = createKernel({ dir, sessionId })
+      const k1 = createKernel({ dir, threadId })
       k1.append(userEntry('persisted'))
       k1.append(assistantEntry('yes', 42))
 
       // Re-create kernel from the same session — should load from file
-      const k2 = createKernel({ dir, sessionId })
+      const k2 = createKernel({ dir, threadId })
       const entries = k2.read()
       expect(entries).toHaveLength(2)
       expect(entries[0].type).toBe('user')

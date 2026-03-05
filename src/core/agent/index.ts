@@ -36,6 +36,6 @@ export type {
 } from './types'
 
 export { Agent, createAgent } from './agent'
-export type { AgentState, AgentSessionOptions } from './agent'
+export type { AgentState, AgentThreadOptions } from './agent'
 export { runLoop } from './loop'
 export { wrapTool } from './wrap-tool'

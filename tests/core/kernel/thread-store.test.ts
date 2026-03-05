@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { listSessions, deleteSession, updateSessionMeta } from '../../../src/core/kernel/session-store.js'
+import { listThreads, deleteThread, updateThreadMeta } from '../../../src/core/kernel/thread-store.js'
 import { createKernel } from '../../../src/core/kernel/kernel.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -10,49 +10,49 @@ import { createKernel } from '../../../src/core/kernel/kernel.js'
 let baseDir: string
 
 beforeEach(() => {
-  baseDir = mkdtempSync(join(tmpdir(), 'session-store-test-'))
+  baseDir = mkdtempSync(join(tmpdir(), 'thread-store-test-'))
 })
 
 afterEach(() => {
   rmSync(baseDir, { recursive: true, force: true })
 })
 
-function seedSession(sessionId: string, withMessages = true): void {
-  const kernel = createKernel({ dir: baseDir, sessionId })
+function seedSession(threadId: string, withMessages = true): void {
+  const kernel = createKernel({ dir: baseDir, threadId })
   if (withMessages) {
     kernel.append({ type: 'user', parts: [{ type: 'text', text: 'hello' }] })
     kernel.append({ type: 'assistant', parts: [{ type: 'text', text: 'reply' }], stopReason: 'stop' })
   }
 }
 
-// ─── listSessions ─────────────────────────────────────────────────────────────
+// ─── listThreads ─────────────────────────────────────────────────────────────
 
-describe('listSessions', () => {
+describe('listThreads', () => {
   it('returns [] when dir does not exist', () => {
-    expect(listSessions('/nonexistent/path/xyz')).toEqual([])
+    expect(listThreads('/nonexistent/path/xyz')).toEqual([])
   })
 
   it('returns [] when dir exists but is empty', () => {
-    expect(listSessions(baseDir)).toEqual([])
+    expect(listThreads(baseDir)).toEqual([])
   })
 
-  it('returns one SessionInfo per session', () => {
+  it('returns one ThreadInfo per session', () => {
     seedSession('sess-a')
     seedSession('sess-b')
-    expect(listSessions(baseDir)).toHaveLength(2)
+    expect(listThreads(baseDir)).toHaveLength(2)
   })
 
-  it('includes sessionId, updatedAt, and messageCount', () => {
+  it('includes threadId, updatedAt, and messageCount', () => {
     seedSession('sess-1')
-    const info = listSessions(baseDir)[0]
-    expect(info.sessionId).toBe('sess-1')
+    const info = listThreads(baseDir)[0]
+    expect(info.threadId).toBe('sess-1')
     expect(info.updatedAt).toBeGreaterThan(0)
     expect(info.messageCount).toBeGreaterThan(0)
   })
 
   it('sets messageCount to 0 for sessions with no log', () => {
     mkdirSync(join(baseDir, 'empty-sess'), { recursive: true })
-    const info = listSessions(baseDir)[0]
+    const info = listThreads(baseDir)[0]
     expect(info.messageCount).toBe(0)
   })
 
@@ -60,140 +60,140 @@ describe('listSessions', () => {
     seedSession('old-sess')
     await new Promise(r => setTimeout(r, 10))
     seedSession('new-sess')
-    const list = listSessions(baseDir)
-    expect(list[0].sessionId).toBe('new-sess')
-    expect(list[1].sessionId).toBe('old-sess')
+    const list = listThreads(baseDir)
+    expect(list[0].threadId).toBe('new-sess')
+    expect(list[1].threadId).toBe('old-sess')
   })
 
   it('skips non-directory entries inside dir', () => {
     seedSession('real-sess')
     writeFileSync(join(baseDir, 'not-a-session.txt'), 'noise')
-    const list = listSessions(baseDir)
+    const list = listThreads(baseDir)
     expect(list).toHaveLength(1)
-    expect(list[0].sessionId).toBe('real-sess')
+    expect(list[0].threadId).toBe('real-sess')
   })
 
   it('handles sessions with malformed log.jsonl gracefully', () => {
     const sessionDir = join(baseDir, 'bad-sess')
     mkdirSync(sessionDir, { recursive: true })
     writeFileSync(join(sessionDir, 'log.jsonl'), 'not valid json\n{broken')
-    expect(() => listSessions(baseDir)).not.toThrow()
+    expect(() => listThreads(baseDir)).not.toThrow()
   })
 })
 
-// ─── deleteSession ────────────────────────────────────────────────────────────
+// ─── deleteThread ────────────────────────────────────────────────────────────
 
-describe('deleteSession', () => {
+describe('deleteThread', () => {
   it('removes the session directory', () => {
     seedSession('to-delete')
-    deleteSession(baseDir, 'to-delete')
-    expect(listSessions(baseDir)).toHaveLength(0)
+    deleteThread(baseDir, 'to-delete')
+    expect(listThreads(baseDir)).toHaveLength(0)
   })
 
-  it('is a no-op when sessionId does not exist', () => {
-    expect(() => deleteSession(baseDir, 'ghost-session')).not.toThrow()
+  it('is a no-op when threadId does not exist', () => {
+    expect(() => deleteThread(baseDir, 'ghost-session')).not.toThrow()
   })
 
   it('is a no-op when dir does not exist', () => {
-    expect(() => deleteSession('/nonexistent/dir', 'sess')).not.toThrow()
+    expect(() => deleteThread('/nonexistent/dir', 'sess')).not.toThrow()
   })
 
   it('does not affect other sessions', () => {
     seedSession('keep-me')
     seedSession('delete-me')
-    deleteSession(baseDir, 'delete-me')
-    const list = listSessions(baseDir)
+    deleteThread(baseDir, 'delete-me')
+    const list = listThreads(baseDir)
     expect(list).toHaveLength(1)
-    expect(list[0].sessionId).toBe('keep-me')
+    expect(list[0].threadId).toBe('keep-me')
   })
 })
 
 // ─── session metadata ─────────────────────────────────────────────────────────
 
 describe('session metadata', () => {
-  it('listSessions returns meta: null for sessions with no meta.json', () => {
+  it('listThreads returns meta: null for sessions with no meta.json', () => {
     // Create a directory without going through createKernel (so no meta.json)
     mkdirSync(join(baseDir, 'bare-sess'), { recursive: true })
     writeFileSync(join(baseDir, 'bare-sess', 'log.jsonl'), '')
-    const info = listSessions(baseDir)[0]
+    const info = listThreads(baseDir)[0]
     expect(info.meta).toBeNull()
   })
 
-  it('listSessions returns meta including createdAt when session is created via createKernel', () => {
+  it('listThreads returns meta including createdAt when session is created via createKernel', () => {
     seedSession('meta-sess')
-    const info = listSessions(baseDir)[0]
+    const info = listThreads(baseDir)[0]
     expect(info.meta).not.toBeNull()
     expect(typeof info.meta!.createdAt).toBe('number')
     expect(info.meta!.createdAt).toBeGreaterThan(0)
   })
 
-  it('listSessions returns title when session is created with meta', () => {
-    createKernel({ dir: baseDir, sessionId: 'titled-sess', meta: { title: 'My Session' } })
-    const info = listSessions(baseDir)[0]
+  it('listThreads returns title when session is created with meta', () => {
+    createKernel({ dir: baseDir, threadId: 'titled-sess', meta: { title: 'My Session' } })
+    const info = listThreads(baseDir)[0]
     expect(info.meta?.title).toBe('My Session')
   })
 
   it('returns meta: null for empty session dir without meta.json', () => {
     mkdirSync(join(baseDir, 'no-meta'), { recursive: true })
-    const info = listSessions(baseDir)[0]
+    const info = listThreads(baseDir)[0]
     expect(info.meta).toBeNull()
   })
 
   it('sets createdAt once and does not overwrite it on subsequent opens', () => {
-    createKernel({ dir: baseDir, sessionId: 'stable-sess' })
-    const firstInfo = listSessions(baseDir)[0]
+    createKernel({ dir: baseDir, threadId: 'stable-sess' })
+    const firstInfo = listThreads(baseDir)[0]
     const firstCreatedAt = firstInfo.meta!.createdAt
 
     // Re-open the same session
-    createKernel({ dir: baseDir, sessionId: 'stable-sess' })
-    const secondInfo = listSessions(baseDir)[0]
+    createKernel({ dir: baseDir, threadId: 'stable-sess' })
+    const secondInfo = listThreads(baseDir)[0]
     expect(secondInfo.meta!.createdAt).toBe(firstCreatedAt)
   })
 
   it('merges new meta fields on subsequent opens without touching createdAt', () => {
-    createKernel({ dir: baseDir, sessionId: 'merge-sess' })
-    const { meta: first } = listSessions(baseDir)[0]
+    createKernel({ dir: baseDir, threadId: 'merge-sess' })
+    const { meta: first } = listThreads(baseDir)[0]
     const originalCreatedAt = first!.createdAt
 
     // Re-open with a title
-    createKernel({ dir: baseDir, sessionId: 'merge-sess', meta: { title: 'Added later' } })
-    const { meta: second } = listSessions(baseDir)[0]
+    createKernel({ dir: baseDir, threadId: 'merge-sess', meta: { title: 'Added later' } })
+    const { meta: second } = listThreads(baseDir)[0]
 
     expect(second!.createdAt).toBe(originalCreatedAt)
     expect(second!.title).toBe('Added later')
   })
 })
 
-// ─── updateSessionMeta ────────────────────────────────────────────────────────
+// ─── updateThreadMeta ────────────────────────────────────────────────────────
 
-describe('updateSessionMeta', () => {
+describe('updateThreadMeta', () => {
   it('merges new fields into existing meta', () => {
-    createKernel({ dir: baseDir, sessionId: 'upd-sess' })
-    updateSessionMeta(baseDir, 'upd-sess', { title: 'Updated Title' })
-    const info = listSessions(baseDir)[0]
+    createKernel({ dir: baseDir, threadId: 'upd-sess' })
+    updateThreadMeta(baseDir, 'upd-sess', { title: 'Updated Title' })
+    const info = listThreads(baseDir)[0]
     expect(info.meta?.title).toBe('Updated Title')
   })
 
   it('does not overwrite createdAt', () => {
-    createKernel({ dir: baseDir, sessionId: 'prot-sess' })
-    const before = listSessions(baseDir)[0].meta!.createdAt
+    createKernel({ dir: baseDir, threadId: 'prot-sess' })
+    const before = listThreads(baseDir)[0].meta!.createdAt
 
     // TypeScript prevents passing createdAt, but test that the value is intact after update
-    updateSessionMeta(baseDir, 'prot-sess', { title: 'New Title' })
-    const after = listSessions(baseDir)[0].meta!.createdAt
+    updateThreadMeta(baseDir, 'prot-sess', { title: 'New Title' })
+    const after = listThreads(baseDir)[0].meta!.createdAt
 
     expect(after).toBe(before)
   })
 
   it('is a no-op when the session does not have a meta.json', () => {
     mkdirSync(join(baseDir, 'no-meta-sess'), { recursive: true })
-    expect(() => updateSessionMeta(baseDir, 'no-meta-sess', { title: 'x' })).not.toThrow()
+    expect(() => updateThreadMeta(baseDir, 'no-meta-sess', { title: 'x' })).not.toThrow()
   })
 
   it('overwrites an existing title when called twice', () => {
-    createKernel({ dir: baseDir, sessionId: 'retitle-sess', meta: { title: 'First' } })
-    updateSessionMeta(baseDir, 'retitle-sess', { title: 'Second' })
-    const info = listSessions(baseDir)[0]
+    createKernel({ dir: baseDir, threadId: 'retitle-sess', meta: { title: 'First' } })
+    updateThreadMeta(baseDir, 'retitle-sess', { title: 'Second' })
+    const info = listThreads(baseDir)[0]
     expect(info.meta?.title).toBe('Second')
   })
 })

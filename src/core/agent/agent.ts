@@ -370,17 +370,17 @@ export class Agent {
 
 // ─── createAgent ──────────────────────────────────────────────────────────────
 
-export interface AgentSessionOptions extends AgentOptions {
-  /** Session persistence. Omit for in-memory mode (testing). */
-  session?: { dir: string; sessionId: string; meta?: KernelOptions['meta'] }
+export interface AgentThreadOptions extends AgentOptions {
+  /** Thread persistence. Omit for in-memory mode (testing). */
+  thread?: { dir: string; threadId: string; meta?: KernelOptions['meta'] }
 }
 
 /**
  * Convenience factory that creates a kernel (optionally with persistence) and
  * wraps it in an Agent. Prefer this over constructing Agent directly.
  */
-export function createAgent(options: AgentSessionOptions): Agent {
-  const { session, ...agentOptions } = options
-  const kernel = createKernel(session)
+export function createAgent(options: AgentThreadOptions): Agent {
+  const { thread, ...agentOptions } = options
+  const kernel = createKernel(thread)
   return new Agent(kernel, agentOptions)
 }

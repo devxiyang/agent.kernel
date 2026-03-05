@@ -9,7 +9,7 @@ import type {
   CompactionEntry,
   TokenBudget,
   KernelOptions,
-  SessionMeta,
+  ThreadMeta,
   ContentPart,
   AssistantPart,
   DataContent,
@@ -59,17 +59,17 @@ class Kernel implements AgentKernel {
 
   constructor(options?: KernelOptions) {
     if (options) {
-      const sessionDir = join(options.dir, options.sessionId)
+      const sessionDir = join(options.dir, options.threadId)
       mkdirSync(sessionDir, { recursive: true })
       this.kernelPath = join(sessionDir, 'kernel.jsonl')
       this.logPath    = join(sessionDir, 'log.jsonl')
 
       const metaPath = join(sessionDir, 'meta.json')
       if (!existsSync(metaPath)) {
-        const meta: SessionMeta = { createdAt: Date.now(), ...options.meta }
+        const meta: ThreadMeta = { createdAt: Date.now(), ...options.meta }
         writeFileSync(metaPath, JSON.stringify(meta))
       } else if (options.meta && Object.keys(options.meta).length > 0) {
-        const existing: SessionMeta = JSON.parse(readFileSync(metaPath, 'utf-8'))
+        const existing: ThreadMeta = JSON.parse(readFileSync(metaPath, 'utf-8'))
         writeFileSync(metaPath, JSON.stringify({ ...existing, ...options.meta }))
       }
     }

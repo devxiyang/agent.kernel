@@ -229,9 +229,9 @@ export interface AgentKernel {
   readLog(): AgentEntry[]
 }
 
-// ─── Session metadata ─────────────────────────────────────────────────────────
+// ─── Thread metadata ──────────────────────────────────────────────────────────
 
-export type SessionMeta = {
+export type ThreadMeta = {
   createdAt: number   // set once at creation, never overwritten
   title?:    string
   pinned?:   boolean
@@ -241,9 +241,9 @@ export type SessionMeta = {
 // ─── Kernel options ──────────────────────────────────────────────────────────
 
 export interface KernelOptions {
-  /** Session directory and ID for persistence. Omit for in-memory mode. */
-  dir:       string
-  sessionId: string
-  /** Optional metadata to set/merge on the session. `createdAt` is auto-set and cannot be overwritten. */
-  meta?:     Partial<Omit<SessionMeta, 'createdAt'>>
+  /** Thread directory and ID for persistence. Omit for in-memory mode. */
+  dir:      string
+  threadId: string
+  /** Optional metadata to set/merge on the thread. `createdAt` is auto-set and cannot be overwritten. */
+  meta?:    Partial<Omit<ThreadMeta, 'createdAt'>>
 }

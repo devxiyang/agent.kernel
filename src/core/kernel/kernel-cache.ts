@@ -5,7 +5,7 @@ import type { AgentKernel, KernelOptions } from './types'
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface KernelCacheOptions {
-  /** Base directory for session persistence (passed to createKernel). */
+  /** Base directory for thread persistence (passed to createKernel). */
   dir: string
   /** Maximum number of kernels to keep in memory. LRU eviction. Default: 50 */
   maxSize?: number
@@ -18,10 +18,10 @@ export interface KernelCacheOptions {
 // ─── KernelCache ──────────────────────────────────────────────────────────────
 
 /**
- * In-memory LRU cache of AgentKernel instances keyed by sessionId.
+ * In-memory LRU cache of AgentKernel instances keyed by threadId.
  *
  * Kernels are expensive to recreate because loadFromFile replays kernel.jsonl
- * on every cold start. KernelCache keeps hot sessions in memory and evicts
+ * on every cold start. KernelCache keeps hot threads in memory and evicts
  * them by LRU order or TTL, falling back to file-based restore on cache miss.
  */
 export class KernelCache {
@@ -38,21 +38,21 @@ export class KernelCache {
   }
 
   /**
-   * Return the cached kernel for sessionId, or create one from disk.
+   * Return the cached kernel for threadId, or create one from disk.
    * Updates LRU order and TTL on every call.
    */
-  get(sessionId: string, meta?: KernelOptions['meta']): AgentKernel {
-    const cached = this._cache.get(sessionId)
+  get(threadId: string, meta?: KernelOptions['meta']): AgentKernel {
+    const cached = this._cache.get(threadId)
     if (cached) return cached
 
-    const kernel = createKernel({ dir: this._dir, sessionId, meta })
-    this._cache.set(sessionId, kernel)
+    const kernel = createKernel({ dir: this._dir, threadId, meta })
+    this._cache.set(threadId, kernel)
     return kernel
   }
 
-  /** Remove a specific session from the cache. */
-  evict(sessionId: string): void {
-    this._cache.delete(sessionId)
+  /** Remove a specific thread from the cache. */
+  evict(threadId: string): void {
+    this._cache.delete(threadId)
   }
 
   /** Remove all cached kernels. */
