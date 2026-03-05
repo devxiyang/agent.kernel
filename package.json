@@ -1,6 +1,6 @@
 {
   "name": "@devxiyang/agent-kernel",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Agent kernel and loop library",
   "license": "MIT",
   "repository": {
@@ -40,7 +40,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "rm -rf dist && tsc -p tsconfig.json",
     "clean": "rm -rf dist",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
