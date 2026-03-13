@@ -164,6 +164,68 @@ describe('session metadata', () => {
   })
 })
 
+// ─── archived filtering ───────────────────────────────────────────────────────
+
+describe('listThreads — archived filtering', () => {
+  it('excludes archived threads by default', () => {
+    seedSession('active-sess')
+    seedSession('archived-sess')
+    updateThreadMeta(baseDir, 'archived-sess', { archived: true })
+    const list = listThreads(baseDir)
+    expect(list).toHaveLength(1)
+    expect(list[0].threadId).toBe('active-sess')
+  })
+
+  it('includes archived threads when includeArchived: true', () => {
+    seedSession('active-sess')
+    seedSession('archived-sess')
+    updateThreadMeta(baseDir, 'archived-sess', { archived: true })
+    const list = listThreads(baseDir, { includeArchived: true })
+    expect(list).toHaveLength(2)
+  })
+
+  it('includes threads with archived: false when default filtering', () => {
+    seedSession('explicit-active')
+    updateThreadMeta(baseDir, 'explicit-active', { archived: false })
+    const list = listThreads(baseDir)
+    expect(list).toHaveLength(1)
+  })
+
+  it('can restore archived thread by setting archived: false', () => {
+    seedSession('toggled-sess')
+    updateThreadMeta(baseDir, 'toggled-sess', { archived: true })
+    expect(listThreads(baseDir)).toHaveLength(0)
+    updateThreadMeta(baseDir, 'toggled-sess', { archived: false })
+    expect(listThreads(baseDir)).toHaveLength(1)
+  })
+})
+
+// ─── fork metadata ────────────────────────────────────────────────────────────
+
+describe('fork metadata', () => {
+  it('stores and retrieves parentThreadId', () => {
+    seedSession('parent-sess')
+    seedSession('child-sess')
+    updateThreadMeta(baseDir, 'child-sess', { parentThreadId: 'parent-sess' })
+    const info = listThreads(baseDir).find(t => t.threadId === 'child-sess')
+    expect(info?.meta?.parentThreadId).toBe('parent-sess')
+  })
+
+  it('stores and retrieves forkFromEntryId', () => {
+    seedSession('parent-sess')
+    seedSession('child-sess')
+    updateThreadMeta(baseDir, 'child-sess', { parentThreadId: 'parent-sess', forkFromEntryId: 42 })
+    const info = listThreads(baseDir).find(t => t.threadId === 'child-sess')
+    expect(info?.meta?.forkFromEntryId).toBe(42)
+  })
+
+  it('root threads have no parentThreadId', () => {
+    seedSession('root-sess')
+    const info = listThreads(baseDir)[0]
+    expect(info.meta?.parentThreadId).toBeUndefined()
+  })
+})
+
 // ─── updateThreadMeta ────────────────────────────────────────────────────────
 
 describe('updateThreadMeta', () => {

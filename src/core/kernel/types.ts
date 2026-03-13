@@ -232,9 +232,34 @@ export interface AgentKernel {
 // ─── Thread metadata ──────────────────────────────────────────────────────────
 
 export type ThreadMeta = {
-  createdAt: number   // set once at creation, never overwritten
+  /** Unix timestamp (ms) at which this thread was created. Set once, never overwritten. */
+  createdAt: number
+  /** Display name shown in the thread list. */
   title?:    string
+  /** Pinned threads are surfaced at the top of the thread list. */
   pinned?:   boolean
+  /**
+   * Soft-delete flag. Archived threads are hidden from the default thread list
+   * but their data is retained on disk. Pass `includeArchived: true` to
+   * `listThreads` to include them.
+   */
+  archived?: boolean
+  /**
+   * The thread ID this thread was forked from.
+   * Set when a new thread is created by copying an existing thread's history,
+   * either by a user action ("fork from this message") or by a child agent
+   * spawned with `fork_context: true`. Omitted for root threads.
+   */
+  parentThreadId?: string
+  /**
+   * The entry ID in the parent thread at the moment of forking.
+   * Together with `parentThreadId`, this pinpoints the exact conversation
+   * state that was copied — useful for UI navigation ("go to fork point")
+   * and for understanding divergence between the parent and this thread.
+   * Omitted for root threads.
+   */
+  forkFromEntryId?: number
+  /** Application-specific fields (e.g. spawnDepth, role for multi-agent threads). */
   [key: string]: unknown
 }
 

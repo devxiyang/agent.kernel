@@ -16,8 +16,11 @@ export type ThreadInfo = {
 /**
  * List all threads under `dir`, sorted by most recently updated first.
  * Returns [] if `dir` does not exist or contains no threads.
+ *
+ * Archived threads (meta.archived === true) are excluded by default.
+ * Pass `{ includeArchived: true }` to include them.
  */
-export function listThreads(dir: string): ThreadInfo[] {
+export function listThreads(dir: string, options?: { includeArchived?: boolean }): ThreadInfo[] {
   if (!existsSync(dir)) return []
 
   let entries: string[]
@@ -73,7 +76,12 @@ export function listThreads(dir: string): ThreadInfo[] {
     sessions.push({ threadId, updatedAt, messageCount, meta })
   }
 
-  return sessions.sort((a, b) => b.updatedAt - a.updatedAt)
+  const includeArchived = options?.includeArchived ?? false
+  const filtered = includeArchived
+    ? sessions
+    : sessions.filter(s => !s.meta?.archived)
+
+  return filtered.sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
 // ─── updateThreadMeta ────────────────────────────────────────────────────────

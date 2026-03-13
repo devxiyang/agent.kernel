@@ -19,7 +19,7 @@ A provider-agnostic agent runtime for TypeScript. Bring your own LLM — `agent-
 - **Auto-compaction hook** — `onContextFull` fires when the token budget is reached
 - **Steering & follow-up** — inject messages mid-run; steering immediately aborts all running tools via `AbortSignal`
 - **Stream error retry** — automatic retry with configurable delay for transient LLM errors
-- **Thread metadata** — attach titles and custom fields to threads; query with `listThreads`
+- **Thread metadata** — attach titles, pin/archive state, fork provenance, and custom fields to threads; query with `listThreads`
 - **Kernel cache** — LRU + TTL in-memory cache for thread kernels
 - **Provider metadata passthrough** — attach provider-specific metadata (e.g. Gemini `thought_signature`) to tool calls via `providerMetadata`; propagated from `ToolCallInfo` through to `AgentMessage` so `StreamFn` adapters can read it
 
@@ -376,17 +376,24 @@ if (entries.length > 12) {
 ```ts
 import { listThreads, deleteThread, updateThreadMeta } from '@devxiyang/agent-kernel/kernel'
 
-// List all threads, sorted by most recently updated
+// List active threads, sorted by most recently updated.
+// Archived threads are excluded by default.
 const threads = listThreads('./.agent-threads')
 // [
 //   { threadId: 'my-thread', updatedAt: 1740000000000, messageCount: 12,
 //     meta: { createdAt: 1739999000000, title: 'Code review assistant' } },
 // ]
 
+// Include archived threads
+const all = listThreads('./.agent-threads', { includeArchived: true })
+
 // Rename a thread
 updateThreadMeta('./.agent-threads', 'my-thread', { title: 'New title' })
 
-// Delete a thread
+// Soft-delete (archive) — hidden from listThreads by default, data retained on disk
+updateThreadMeta('./.agent-threads', 'my-thread', { archived: true })
+
+// Hard-delete — removes all files for the thread
 deleteThread('./.agent-threads', 'my-thread')
 ```
 
@@ -396,12 +403,22 @@ All functions are safe to call on non-existent paths — `listThreads` returns `
 
 ```ts
 type ThreadMeta = {
-  createdAt: number   // Unix ms — set once, never overwritten
+  createdAt: number        // Unix ms — set once, never overwritten
   title?:    string
+  pinned?:   boolean       // surface at the top of the thread list
+  archived?: boolean       // soft-delete; excluded from listThreads by default
+
+  // Fork provenance — set when a thread is created by copying another thread's history
+  // (user-initiated "fork from this message", or child agent spawned with fork_context)
+  parentThreadId?:  string  // thread this was forked from
+  forkFromEntryId?: number  // entry ID in the parent at the moment of forking;
+                             // useful for "go to fork point" UI navigation
+
+  [key: string]: unknown   // application-specific fields (e.g. spawnDepth, role)
 }
 
 type ThreadInfo = {
-  threadId:    string
+  threadId:     string
   updatedAt:    number        // log.jsonl mtime in milliseconds
   messageCount: number        // entries in log.jsonl
   meta:         ThreadMeta | null
